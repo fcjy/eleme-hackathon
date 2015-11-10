@@ -10,7 +10,7 @@
 1. <a href="#orders">查询订单</a>
 1. <a href="#admin-orders">后台接口－查询订单</a>
 
-除登录接口外，其他接口需要传入登录接口得到的access_token，access_token无效或者为空会直接返回401异常：
+除登录接口外，其他接口需要传入登录接口得到的 access_token，access_token 无效或者为空会直接返回401异常：
 
 ```
 401 Unauthorized
@@ -19,10 +19,21 @@
     "message": "无效的令牌"
 }
 ```
-其中后台接口只有用root用户登录后的access_token才能访问。
+
+其中后台接口只有用 root 用户登录后的 access_token 才能访问。
+
+其中 access_token 需要支持： parameter 和 http header 两种认证方式。客户端提供其中一个即可通过认证。
+
+```
+# by parameter
+GET /foods?access_token=xxx
+
+# by http header
+GET /foods Access-Token:xxx
+```
 
 
-如果需要传参的接口，传过来的body为空。则返回400异常:
+如果需要传参的接口，传过来的 body 为空。则返回400异常:
 
 ```
 400 Bad Request
@@ -32,7 +43,7 @@
 }
 ```
 
-如果需要传参的接口，传过来的请求体json格式有误。则返回400异常:
+如果需要传参的接口，传过来的请求体 json 格式有误。则返回 400 异常:
 
 ```
 400 Bad Request
@@ -181,16 +192,6 @@ PATCH /carts/e0c68eb96bd8495dbb8fcd8e86fc48a3?access_token=xxx
 }
 ```
 
-食物库存不足：
-
-```
-403 Forbidden
-{
-    "code": "FOOD_OUT_OF_STOCK",
-    "message": "食物库存不足"
-}
-```
-
 食物数量超过篮子最大限制：
 
 ```
@@ -204,7 +205,7 @@ PATCH /carts/e0c68eb96bd8495dbb8fcd8e86fc48a3?access_token=xxx
 食物不存在：
 
 ```
-403 Forbidden
+404 Not Found
 {
     "code": "FOOD_NOT_FOUND",
     "message": "食物不存在"
@@ -213,6 +214,7 @@ PATCH /carts/e0c68eb96bd8495dbb8fcd8e86fc48a3?access_token=xxx
 
 <a name="order" />
 ## 下单
+
 `POST /orders`
 
 ##### 请求体
@@ -235,7 +237,7 @@ POST /orders?access_token=xxx
 ```
 200 OK
 {
-    "id ": "1024234783243"
+    "id ": "someorderid"
 }
 ```
 
@@ -244,7 +246,7 @@ POST /orders?access_token=xxx
 篮子不存在
 
 ```
-403 Forbidden
+404 Not Found
 {
     "code": "CART_NOT_FOUND",
     "message": "篮子不存在"
@@ -258,6 +260,16 @@ POST /orders?access_token=xxx
 {
     "code": "NOT_AUTHORIZED_TO_ACCESS_CART",
     "message": "无权限访问指定的篮子"
+}
+```
+
+食物库存不足：
+
+```
+403 Forbidden
+{
+    "code": "FOOD_OUT_OF_STOCK",
+    "message": "食物库存不足"
 }
 ```
 
@@ -287,7 +299,7 @@ GET /orders?access_token=xxx
 200 OK
 [
     {
-        "id": 1024,
+        "id": "someorderid",
         "items": [
             {"food_id": 2, "count": 1}
         ],
@@ -313,7 +325,7 @@ GET /admin/orders?access_token=xxx
 200 OK
 [
     {
-        "id": 1024,
+        "id": "someorderid",
         "user_id": 1,
         "items": [
             {"food_id": 2, "count": 1}
