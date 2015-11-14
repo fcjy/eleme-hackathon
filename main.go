@@ -151,9 +151,10 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 			rc := redisPool.Get()
 			defer rc.Close()
-			rc.Do("HSET", "token:", token, id)
-
+			
 			rows.Scan(&id, &username, &password)
+			rc.Do("HSET", "token:", token, id)
+			
 			responseJson := fmt.Sprintf("{\"user_id\":%d,\"username\":\"%s\",\"access_token\":\"%s\"}", id, username, token)
 			response(&w, 200, []byte(responseJson))
 			return
@@ -187,7 +188,7 @@ func foodsHandler(w http.ResponseWriter, r *http.Request) {
 			foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", id, foodCache[id].Price, count)
 			foodCache[id] = foodInfo{
 				Price: foodCache[id].Price,
-				Count: count,
+				Count: min(count, foodCache[id].Count),
 			}
 			if i != 0 {
 				responseJson.WriteString(",")
@@ -340,6 +341,15 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request) {
 						queued, _ := rc.Do("EXEC")
 
 						if queued != nil {
+							for i := 0; i < len(foods); i++ {
+								key, _ := foods[i].(string)
+								id, _ := strconv.Atoi(key[11:len(key)])
+								foodCache[id] = foodInfo{
+									Price: foodCache[id].Price,
+									Count: min(counts[i], foodCache[id].Count),
+								}
+							}
+
 							break
 						}
 					}
@@ -424,7 +434,7 @@ func getFoodInfo(id int) foodInfo {
 		defer rc.Close()
 
 		count, _ := redis.Int64(rc.Do("GET", "food_count:" + strconv.Itoa(id)))
-		foodInfo.Count = int(count)
+		foodInfo.Count = min(int(count), foodInfo.Count)
 		foodCache[id] = foodInfo
 	}
 	return foodInfo
@@ -469,6 +479,14 @@ func getToken() string {
         b[i] = letterBytes[rand.Int63() % int64(len(letterBytes))]
     }
     return string(b)
+}
+
+func min(x, y int) int {
+	if x < y {
+		return x
+	} else {
+		return y
+	}
 }
 
 func checkErr(err error) {
