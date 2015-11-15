@@ -1,6 +1,8 @@
 language: go
 script:
-    - go get github.com/garyburd/redigo
-    - go get github.com/go-sql-driver/mysql
-    - go get github.com/drone/routes
+    - mkdir $GOPATH/src
+    - cp -r libs/* $GOPATH/src
+    - go build github.com/garyburd/redigo/redis
+    - go build github.com/go-sql-driver/mysql
+    - go build github.com/drone/routes
     - go run main.go
