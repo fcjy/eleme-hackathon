@@ -17,7 +17,7 @@ import (
 )
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-const tokenLength = 32
+const tokenLength = 24
 
 var db *sql.DB
 var redisPool *redis.Pool
@@ -45,15 +45,15 @@ func init() {
 	dbPass := os.Getenv("DB_PASS")
 
 	db, _ = sql.Open("mysql", dbUser + ":" + dbPass + "@/" + dbName + "?charset=utf8")
-	db.SetMaxOpenConns(2000)
-    db.SetMaxIdleConns(1000)
+	db.SetMaxOpenConns(128)
+    db.SetMaxIdleConns(256)
     err := db.Ping()
     checkErr(err)
 
     redisPool = &redis.Pool{
-        MaxIdle: 1000,
-        MaxActive: 2000,
-        IdleTimeout: 300 * time.Second,
+        MaxIdle: 512,
+        MaxActive: 1024,
+        IdleTimeout: 120 * time.Second,
         Dial: func() (redis.Conn, error) {
             c, err := redis.Dial("tcp", os.Getenv("REDIS_HOST") + ":" + os.Getenv("REDIS_PORT"))
             if err != nil {
@@ -72,8 +72,6 @@ func initCache() {
 	rc := redisPool.Get()
 	defer rc.Close()
 
-	rc.Do("DEL", "order")
-
 	foodCache = make(map[int]foodInfo)
 
 	for rows.Next() {
@@ -85,7 +83,7 @@ func initCache() {
 			Count: stock,
 			Price: price,
 		}
-		rc.Do("SET", "food_count:" + strconv.Itoa(id), stock)
+		rc.Do("SETNX", "food_count:" + strconv.Itoa(id), stock)
 	}
 }
 
@@ -95,10 +93,6 @@ func main() {
 		if err := recover(); err != nil{
 			log.Println(err);
 		}
-
-		rc := redisPool.Get()
-		rc.Do("FLUSHALL")
-		rc.Close()
 	} ()
 
 	host := os.Getenv("APP_HOST")
@@ -153,7 +147,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			defer rc.Close()
 			
 			rows.Scan(&id, &username, &password)
-			rc.Do("HSET", "token:", token, id)
+			rc.Do("HSET", "token", token, id)
 			
 			responseJson := fmt.Sprintf("{\"user_id\":%d,\"username\":\"%s\",\"access_token\":\"%s\"}", id, username, token)
 			response(&w, 200, []byte(responseJson))
@@ -295,6 +289,8 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request) {
 		    		responseMalformedJson(&w)   			
 				}
 			} else {
+				//println("In post order: " + input.CartId)
+
 				res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:" + input.CartId))
 				if len(res) == 0 {
 					response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
@@ -350,7 +346,11 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request) {
 								}
 							}
 
+							//println("  success post order: " + input.CartId)
+
 							break
+						} else {
+							//println("  fail post order: " + input.CartId)
 						}
 					}
 
@@ -448,7 +448,7 @@ func checkToken(r *http.Request) int {
 		token = r.FormValue("access_token")
 	}
 
-	ret, err := redis.Int64(rc.Do("HGET", "token:", token))
+	ret, err := redis.Int64(rc.Do("HGET", "token", token))
 	if err != nil {
 		return -1
 	}
