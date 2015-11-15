@@ -1,6 +1,6 @@
 language: go
 script:
-    - go get github.com/garyburd/redigo/redis
+    - go get github.com/garyburd/redigo
     - go get github.com/go-sql-driver/mysql
     - go get github.com/drone/routes
     - go run main.go
