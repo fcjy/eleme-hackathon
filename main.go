@@ -211,6 +211,8 @@ func postCartHandler(w http.ResponseWriter, r *http.Request) {
 		rc.Do("HSET", "cart:" + token, "user_id", uid)
 	   	responseJson := fmt.Sprintf("{\"cart_id\":\"%s\"}", token)
 		response(&w, 200, []byte(responseJson))
+	} else {
+		responseInvalidToken(&w)
 	}
 }
 
@@ -261,6 +263,8 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	} else {
+		responseInvalidToken(&w)
 	}
 }
 
@@ -380,6 +384,8 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	} else {
+		responseInvalidToken(&w)
 	}
 }
 
@@ -391,11 +397,14 @@ func getOrderHandler(w http.ResponseWriter, r *http.Request) {
 
 		oj, _ := redis.String(rc.Do("HGET", "order", uid))
 		response(&w, 200, []byte("[" + oj + "]"))
+	} else {
+		responseInvalidToken(&w)
 	}
 }
 
 func adminHandler(w http.ResponseWriter, r *http.Request) {
 	uid := checkToken(r)
+
 	if uid != -1 {
 		rows, _ := db.Query("select name from user where id=" + strconv.Itoa(uid))
 		defer rows.Close()
@@ -422,8 +431,12 @@ func adminHandler(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				responseJson.WriteString("]")
+
+				response(&w, 200, responseJson.Bytes())
 			}
 		}
+	} else {
+		responseInvalidToken(&w)
 	}
 }
 
