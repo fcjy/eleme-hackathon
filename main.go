@@ -269,7 +269,6 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request) {
 				if sum > 3 {
 					response(&w, 403, []byte(`{"code":"FOOD_OUT_OF_LIMIT","message":"篮子中食物数量超过了三个"}`))
 				} else {
-                    println("add to cart", cid, input.FoodId, res[sfid])
                     if res[sfid] > 0 {
                         rc.Do("HSET", "cart:" + cid, input.FoodId, res[sfid])
                     } else {
@@ -302,7 +301,6 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request) {
 			var input inputData
 			err := decoder.Decode(&input)
 			if err != nil {
-				println("In postOrderHandler shit")
 				if err.Error() == "EOF" {
 					responseEemptyRequest(&w)
 				} else {
