@@ -8,14 +8,23 @@ from conftest import jget, jpost, jpatch
 
 items = {"food_id": 1, "count": 2}
 
+times = 0
 
 @pytest.fixture
 def make_order(url):
     def _f(token, _items=None):
-        res = jpost(url + "/carts", token)
-        cart_id = res.json()["cart_id"]
-        jpatch(url + "/carts/%s" % cart_id, token, _items or items)
-        return jpost(url + "/orders", token, {"cart_id": cart_id})
+        global times
+        times += 1
+        if times % 2 == 0:
+            res = jpost("http://192.168.50.1:8080/carts", token)
+            cart_id = res.json()["cart_id"]
+            jpatch("http://192.168.50.2:8080/carts/%s" % cart_id, token, _items or items)
+            return jpost("http://192.168.50.1:8080/orders", token, {"cart_id": cart_id})
+        else:
+            res = jpost("http://192.168.50.2:8080/carts", token)
+            cart_id = res.json()["cart_id"]
+            jpatch("http://192.168.50.1:8080/carts/%s" % cart_id, token, _items or items)
+            return jpost("http://192.168.50.2:8080/orders", token, {"cart_id": cart_id})
     return _f
 
 
@@ -108,11 +117,11 @@ def test_food_stock_consistency(tokens, make_order, stock_of):
     # should able to make order when there's remain of food stock
     food_id = 42
     remain_stock = stock_of(food_id)
+
     for token in token_gen:
         count = min(remain_stock, 3)
         res = make_order(token, {"food_id": food_id, "count": count})
         remain_stock -= count
-
         if remain_stock == 0:
             break
 
