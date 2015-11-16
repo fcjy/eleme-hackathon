@@ -40,11 +40,18 @@ type orderStruct struct{
 }
 
 func init() {
+    rand.Seed(time.Now().UTC().UnixNano())	
+	
+    dbHost := os.Getenv("DB_HOST")
+    dbPort := os.Getenv("DB_PORT")	
 	dbName := os.Getenv("DB_NAME")
 	dbUser := os.Getenv("DB_USER")
 	dbPass := os.Getenv("DB_PASS")
 
-	db, _ = sql.Open("mysql", dbUser + ":" + dbPass + "@/" + dbName + "?charset=utf8")
+    rdHost := os.Getenv("REDIS_HOST")
+    rdPort := os.Getenv("REDIS_PORT")
+
+    db, _ = sql.Open("mysql", dbUser + ":" + dbPass + "@tcp(" + dbHost + ":" + dbPort + ")/" + dbName + "?charset=utf8")
 	db.SetMaxOpenConns(128)
     db.SetMaxIdleConns(256)
     err := db.Ping()
@@ -55,7 +62,7 @@ func init() {
         MaxActive: 1024,
         IdleTimeout: 120 * time.Second,
         Dial: func() (redis.Conn, error) {
-            c, err := redis.Dial("tcp", os.Getenv("REDIS_HOST") + ":" + os.Getenv("REDIS_PORT"))
+            c, err := redis.Dial("tcp", rdHost + ":" + rdPort)
             if err != nil {
                 panic(err.Error())
             }
@@ -249,7 +256,11 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request) {
 				response(&w, 401, []byte(`{"code":"NOT_AUTHORIZED_TO_ACCESS_CART","message":"无权限访问指定的篮子"}`))
 			} else {
 				sum := 0
-				res[strconv.Itoa(input.FoodId)] += int64(input.Count)
+                sfid := strconv.Itoa(input.FoodId)
+                res[sfid] += int64(input.Count)
+                if res[sfid] < 0 {
+                    res[sfid] = 0
+                }
 				for key, value := range res {
 					if key != "user_id" {
 						sum += int(value)
@@ -258,7 +269,12 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request) {
 				if sum > 3 {
 					response(&w, 403, []byte(`{"code":"FOOD_OUT_OF_LIMIT","message":"篮子中食物数量超过了三个"}`))
 				} else {
-					rc.Do("HSET", "cart:" + cid, input.FoodId, res[strconv.Itoa(input.FoodId)])
+                    println("add to cart", cid, input.FoodId, res[sfid])
+                    if res[sfid] > 0 {
+                        rc.Do("HSET", "cart:" + cid, input.FoodId, res[sfid])
+                    } else {
+                        rc.Do("HDEL", "cart:" + cid, input.FoodId)
+                    }
 					response(&w, 204, []byte(``))
 				}
 			}
