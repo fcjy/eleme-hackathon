@@ -1,5 +1,6 @@
 language: go
 script:
+    - mkdir $GOPATH
     - mkdir $GOPATH/src
     - cp -r libs/* $GOPATH/src
     - go build github.com/garyburd/redigo/redis
