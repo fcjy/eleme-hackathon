@@ -42,14 +42,17 @@ type orderStruct struct{
 func init() {
     rand.Seed(time.Now().UTC().UnixNano())	
 	
-    dbHost := os.Getenv("DB_HOST")
+    //dbHost := os.Getenv("DB_HOST")
     dbPort := os.Getenv("DB_PORT")	
 	dbName := os.Getenv("DB_NAME")
 	dbUser := os.Getenv("DB_USER")
 	dbPass := os.Getenv("DB_PASS")
 
-    rdHost := os.Getenv("REDIS_HOST")
+    //rdHost := os.Getenv("REDIS_HOST")
     rdPort := os.Getenv("REDIS_PORT")
+
+    dbHost := "192.168.50.1"
+    rdHost := "192.168.50.1"
 
     db, _ = sql.Open("mysql", dbUser + ":" + dbPass + "@tcp(" + dbHost + ":" + dbPort + ")/" + dbName + "?charset=utf8")
 	db.SetMaxOpenConns(128)
@@ -269,7 +272,6 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request) {
 				if sum > 3 {
 					response(&w, 403, []byte(`{"code":"FOOD_OUT_OF_LIMIT","message":"篮子中食物数量超过了三个"}`))
 				} else {
-                    println("add to cart", cid, input.FoodId, res[sfid])
                     if res[sfid] > 0 {
                         rc.Do("HSET", "cart:" + cid, input.FoodId, res[sfid])
                     } else {
@@ -302,7 +304,6 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request) {
 			var input inputData
 			err := decoder.Decode(&input)
 			if err != nil {
-				println("In postOrderHandler shit")
 				if err.Error() == "EOF" {
 					responseEemptyRequest(&w)
 				} else {
