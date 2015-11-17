@@ -369,7 +369,6 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request) {
 						for i := 0; i < len(foods); i++ {
 							key, _ := foods[i].(string)
 							id := key[11:len(key)]
-							iid, _ := strconv.Atoi(id)
 
 							counts[i] -= int(res[id])
 							if counts[i] < 0 {
