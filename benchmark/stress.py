@@ -48,13 +48,13 @@ REQUEST_FAILURE_KEY = "{}:request_failure".format(KEY_PREFIX)
 REQ_FINISH_TIME_KEY = "{}:req_finish_time".format(KEY_PREFIX)
 ORDER_FINISH_TIME_KEY = "{}:order_finish_time".format(KEY_PREFIX)
 
-redis_store = redis.Redis()
+redis_store = redis.Redis(host='192.168.50.1', port=6379)
 users, foods = {}, []
 
 
 @contextlib.contextmanager
 def db_query():
-    db = pymysql.connect(host=os.getenv("DB_HOST", "localhost"),
+    db = pymysql.connect(host=os.getenv("DB_HOST", "192.168.50.1"),
                          port=int(os.getenv("DB_PORT", 3306)),
                          user=os.getenv("DB_USER", "root"),
                          passwd=os.getenv("DB_PASS", "toor"),

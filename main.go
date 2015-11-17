@@ -5,6 +5,7 @@ import (
 	"log"
 	"fmt"
 	"bytes"
+	"net"
 	"net/http"
 	"math/rand"
 	"strconv"
@@ -38,6 +39,8 @@ type orderStruct struct{
 	Items []foodItem `json:"items"`
 	Total int `json:"total"`
 }
+
+var foodListCache []byte
 
 func init() {
     rand.Seed(time.Now().UTC().UnixNano())	
@@ -83,7 +86,9 @@ func initCache() {
 	defer rc.Close()
 
 	foodCache = make(map[int]foodInfo)
-
+	foodListBuf := new(bytes.Buffer)
+	foodListBuf.WriteString("[")
+	isBeg := true
 	for rows.Next() {
 		var id int
 		var stock int
@@ -94,7 +99,19 @@ func initCache() {
 			Price: price,
 		}
 		rc.Do("SETNX", "food_count:" + strconv.Itoa(id), stock)
+
+		if isBeg {
+			isBeg = false
+		} else {
+			foodListBuf.WriteString(",")
+		}
+
+		foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", id, price, stock)
+		foodListBuf.WriteString(foodJson)
 	}
+	foodListBuf.WriteString("]")
+
+	foodListCache = foodListBuf.Bytes()
 }
 
 func main() {
@@ -117,7 +134,7 @@ func main() {
 
 	mux := routes.New()
 	mux.Post("/login", loginHandler)
-	mux.Get("/foods", foodsHandler)
+	mux.Get("/foods", foodsHandlerFromCache)
 	mux.Post("/carts", postCartHandler)
 	mux.Patch("/carts/:cid", patchCartHandler)
 	mux.Post("/orders", postOrderHandler)
@@ -201,6 +218,16 @@ func foodsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		responseJson.WriteString("]")
 		response(&w, 200, responseJson.Bytes())
+	} else {
+		responseInvalidToken(&w)
+	}
+}
+
+func foodsHandlerFromCache(w http.ResponseWriter, r *http.Request) {
+	uid := checkToken(r)
+	if uid != -1 {
+		updatefoodList()
+		response(&w, 200, foodListCache)
 	} else {
 		responseInvalidToken(&w)
 	}
@@ -342,6 +369,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request) {
 						for i := 0; i < len(foods); i++ {
 							key, _ := foods[i].(string)
 							id := key[11:len(key)]
+							iid, _ := strconv.Atoi(id)
 
 							counts[i] -= int(res[id])
 							if counts[i] < 0 {
@@ -486,6 +514,47 @@ func checkToken(r *http.Request) int {
 	return int(ret)
 }
 
+var foodListUpdateTimes = 0
+func updatefoodList() {
+	foodListUpdateTimes++
+
+	if foodListUpdateTimes % 500 == 0 {
+		println("Update", foodListUpdateTimes)
+
+		rc := redisPool.Get()
+		defer rc.Close()
+
+		values := make([]int, 0, len(foodCache))
+		keys := make([]interface{}, 0, len(foodCache))
+	    for k, _ := range foodCache {
+	        keys = append(keys, "food_count:" + strconv.Itoa(k))
+	    }
+		res, _ := redis.Values(rc.Do("MGET", keys...))
+		redis.ScanSlice(res, &values)
+
+		responseJson := new(bytes.Buffer)
+		responseJson.WriteString("[")
+		for i := 0; i < len(keys); i++ {
+			key, _ := keys[i].(string)
+			id, _ := strconv.Atoi(key[11:len(key)])
+			count := values[i]
+
+			foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", id, foodCache[id].Price, count)
+			foodCache[id] = foodInfo{
+				Price: foodCache[id].Price,
+				Count: min(count, foodCache[id].Count),
+			}
+			if i != 0 {
+				responseJson.WriteString(",")
+			}
+			responseJson.WriteString(foodJson)
+		}
+		responseJson.WriteString("]")
+
+		foodListCache = responseJson.Bytes()
+	}
+}
+
 func response(w *http.ResponseWriter, code int, json []byte) {
 	(*w).WriteHeader(code)
 	(*w).Write(json)
@@ -523,4 +592,20 @@ func checkErr(err error) {
     if err != nil {
         panic(err)
     }
+}
+
+func getIp() string {
+    name, err := os.Hostname()
+    if err != nil {
+         fmt.Printf("Oops: %v\n", err)
+         return "Error in getIp"
+    }
+
+    addrs, err := net.LookupHost(name)
+    if err != nil {
+        fmt.Printf("Oops: %v\n", err)
+        return "Error in getIp"
+    }
+
+    return addrs[1]
 }
