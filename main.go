@@ -17,10 +17,10 @@ import (
 	"github.com/drone/routes"
 )
 
+const localMultVmTest = false
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 const tokenLength = 24
 
-var db *sql.DB
 var redisPool *redis.Pool
 
 type foodInfo struct{
@@ -28,6 +28,15 @@ type foodInfo struct{
 	Price int
 }
 var foodCache map[int]foodInfo
+
+type userInfo struct{
+	Id int
+	Password string
+}
+var userCache map[string]userInfo
+
+var foodListCache []byte
+
 
 type foodItem struct{
 	FoodId int `json:"food_id"`
@@ -40,33 +49,19 @@ type orderStruct struct{
 	Total int `json:"total"`
 }
 
-var foodListCache []byte
-
 func init() {
     rand.Seed(time.Now().UTC().UnixNano())	
 	
-    dbHost := os.Getenv("DB_HOST")
-    dbPort := os.Getenv("DB_PORT")	
-	dbName := os.Getenv("DB_NAME")
-	dbUser := os.Getenv("DB_USER")
-	dbPass := os.Getenv("DB_PASS")
-
     rdHost := os.Getenv("REDIS_HOST")
     rdPort := os.Getenv("REDIS_PORT")
-
-    // dbHost := "192.168.50.1"
-    // rdHost := "192.168.50.1"
-
-    db, _ = sql.Open("mysql", dbUser + ":" + dbPass + "@tcp(" + dbHost + ":" + dbPort + ")/" + dbName + "?charset=utf8")
-	db.SetMaxOpenConns(128)
-    db.SetMaxIdleConns(256)
-    err := db.Ping()
-    checkErr(err)
+    if localMultVmTest {
+    	rdHost = "192.168.50.1"
+    }
 
     redisPool = &redis.Pool{
-        MaxIdle: 512,
-        MaxActive: 1024,
-        IdleTimeout: 120 * time.Second,
+        MaxIdle: 1024,
+        MaxActive: 2048,
+        IdleTimeout: 600 * time.Second,
         Dial: func() (redis.Conn, error) {
             c, err := redis.Dial("tcp", rdHost + ":" + rdPort)
             if err != nil {
@@ -80,6 +75,17 @@ func init() {
 }
 
 func initCache() {
+    dbHost := os.Getenv("DB_HOST")
+    dbPort := os.Getenv("DB_PORT")	
+	dbName := os.Getenv("DB_NAME")
+	dbUser := os.Getenv("DB_USER")
+	dbPass := os.Getenv("DB_PASS")
+	if localMultVmTest {
+    	dbHost = "192.168.50.1"
+    }
+
+	db, _ := sql.Open("mysql", dbUser + ":" + dbPass + "@tcp(" + dbHost + ":" + dbPort + ")/" + dbName + "?charset=utf8")
+    defer db.Close();
 	rows, _ := db.Query("select * from food")
 	defer rows.Close()
 	rc := redisPool.Get()
@@ -110,13 +116,24 @@ func initCache() {
 		foodListBuf.WriteString(foodJson)
 	}
 	foodListBuf.WriteString("]")
-
 	foodListCache = foodListBuf.Bytes()
+
+	rows, _ = db.Query("select * from user")
+	userCache = make(map[string]userInfo)
+	for rows.Next() {
+		var id int
+		var name string
+		var password string
+		rows.Scan(&id, &name, &password)
+		userCache[name] = userInfo{
+			Id: id,
+			Password: password,
+		}
+	}
 }
 
 func main() {
 	defer func(){
-		db.Close();
 		if err := recover(); err != nil{
 			log.Println(err);
 		}
@@ -161,27 +178,19 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
     		responseMalformedJson(&w)   			
 		}
 	} else {
-		rows, _ := db.Query("select * from user where name='" + input.Username + "' and password='" + input.Password + "' limit 1")
-		defer rows.Close()
-
-		for rows.Next() {
-			var id int
-			var username string
-			var password string
-			token := getToken()
-
+		userEntity, isHave := userCache[input.Username]
+		if isHave && userEntity.Password == input.Password {
 			rc := redisPool.Get()
 			defer rc.Close()
 			
-			rows.Scan(&id, &username, &password)
-			rc.Do("HSET", "token", token, id)
+			token := getToken()
+			rc.Do("HSET", "token", token, userEntity.Id)
 			
-			responseJson := fmt.Sprintf("{\"user_id\":%d,\"username\":\"%s\",\"access_token\":\"%s\"}", id, username, token)
-			response(&w, 200, []byte(responseJson))
-			return
+			responseJson := fmt.Sprintf("{\"user_id\":%d,\"username\":\"%s\",\"access_token\":\"%s\"}", userEntity.Id, input.Username, token)	
+			response(&w, 200, []byte(responseJson))		
+		} else {
+			response(&w, 403, []byte(`{"code":"USER_AUTH_FAIL","message":"用户名或密码错误"}`))
 		}
-
-		response(&w, 403, []byte(`{"code":"USER_AUTH_FAIL","message":"用户名或密码错误"}`))
 	}
 }
 
@@ -442,36 +451,25 @@ func getOrderHandler(w http.ResponseWriter, r *http.Request) {
 func adminHandler(w http.ResponseWriter, r *http.Request) {
 	uid := checkToken(r)
 
-	if uid != -1 {
-		rows, _ := db.Query("select name from user where id=" + strconv.Itoa(uid))
-		defer rows.Close()
+	if userCache["root"].Id == uid {
+		rc := redisPool.Get()
+		defer rc.Close()
 
-		for rows.Next() {		
-			var name string
-			rows.Scan(&name)
-			if name != "root" {
-				responseInvalidToken(&w)
-			} else {
-				rc := redisPool.Get()
-				defer rc.Close()
+		res, _ := redis.Values(rc.Do("HGETALL", "order"))
+		var arr []string
+		redis.ScanSlice(res, &arr)
 
-				res, _ := redis.Values(rc.Do("HGETALL", "order"))
-				var arr []string
-				redis.ScanSlice(res, &arr)
-
-				responseJson := new(bytes.Buffer)
-				responseJson.WriteString("[")
-				for i := 0; i < len(arr); i += 2 {
-					responseJson.WriteString(arr[i + 1])
-					if i != 0 {
-						responseJson.WriteString(",")
-					}
-				}
-				responseJson.WriteString("]")
-
-				response(&w, 200, responseJson.Bytes())
+		responseJson := new(bytes.Buffer)
+		responseJson.WriteString("[")
+		for i := 0; i < len(arr); i += 2 {
+			responseJson.WriteString(arr[i + 1])
+			if i != 0 {
+				responseJson.WriteString(",")
 			}
 		}
+		responseJson.WriteString("]")
+
+		response(&w, 200, responseJson.Bytes())
 	} else {
 		responseInvalidToken(&w)
 	}
