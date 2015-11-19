@@ -5,5 +5,5 @@ script:
     - cp -r libs/* $GOPATH/src
     - go build github.com/garyburd/redigo/redis
     - go build github.com/go-sql-driver/mysql
-    - go build github.com/drone/routes
+    - go build github.com/julienschmidt/httprouter
     - go run main.go
