@@ -14,7 +14,7 @@ import (
 	"database/sql"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/garyburd/redigo/redis"
-	"github.com/drone/routes"
+	"github.com/julienschmidt/httprouter"
 )
 
 const localMultVmTest = false
@@ -149,20 +149,20 @@ func main() {
 	}
 	addr := fmt.Sprintf("%s:%s", host, port)
 
-	mux := routes.New()
-	mux.Post("/login", loginHandler)
-	mux.Get("/foods", foodsHandlerFromCache)
-	mux.Post("/carts", postCartHandler)
-	mux.Patch("/carts/:cid", patchCartHandler)
-	mux.Post("/orders", postOrderHandler)
-	mux.Get("/orders", getOrderHandler)
-	mux.Get("/admin/orders", adminHandler)
+	router := httprouter.New()
 
-	http.Handle("/", mux)
-	http.ListenAndServe(addr, nil)
+	router.POST("/login", loginHandler)
+	router.GET("/foods", foodsHandlerFromCache)
+	router.POST("/carts", postCartHandler)
+	router.PATCH("/carts/:cid", patchCartHandler)
+	router.POST("/orders", postOrderHandler)
+	router.GET("/orders", getOrderHandler)
+	router.GET("/admin/orders", adminHandler)
+
+	http.ListenAndServe(addr, router)
 }
 
-func loginHandler(w http.ResponseWriter, r *http.Request) {
+func loginHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	type inputData struct{
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -194,7 +194,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func foodsHandler(w http.ResponseWriter, r *http.Request) {
+func foodsHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	uid := checkToken(r)
 	if uid != -1 {
 		rc := redisPool.Get()
@@ -232,7 +232,7 @@ func foodsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func foodsHandlerFromCache(w http.ResponseWriter, r *http.Request) {
+func foodsHandlerFromCache(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	uid := checkToken(r)
 	if uid != -1 {
 		updatefoodList()
@@ -242,7 +242,7 @@ func foodsHandlerFromCache(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func postCartHandler(w http.ResponseWriter, r *http.Request) {
+func postCartHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	type inputData struct{
 		FoodId string `json:"food_id"`
 		Count string `json:"count"`
@@ -262,14 +262,13 @@ func postCartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func patchCartHandler(w http.ResponseWriter, r *http.Request) {
+func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	type inputData struct{
 		FoodId int `json:"food_id"`
 		Count int `json:"count"`
 	}
 
-    params := r.URL.Query()
-    cid := params.Get(":cid")
+    cid := ps.ByName("cid")
     uid := checkToken(r)
 
 	if uid != -1 {
@@ -322,7 +321,7 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func postOrderHandler(w http.ResponseWriter, r *http.Request) {
+func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	type inputData struct{
 		CartId string `json:"cart_id"`
 	}
@@ -435,7 +434,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func getOrderHandler(w http.ResponseWriter, r *http.Request) {
+func getOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	uid := checkToken(r)
 	if uid != -1 {
 		rc := redisPool.Get()
@@ -448,7 +447,7 @@ func getOrderHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func adminHandler(w http.ResponseWriter, r *http.Request) {
+func adminHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	uid := checkToken(r)
 
 	if userCache["root"].Id == uid {
@@ -510,7 +509,6 @@ func updatefoodList() {
 
 	if foodListUpdateTimes % 500 == 0 {
 		rc := redisPool.Get()
-		defer rc.Close()
 
 		values := make([]int, 0, len(foodCache))
 		keys := make([]interface{}, 0, len(foodCache))
@@ -540,6 +538,8 @@ func updatefoodList() {
 		responseJson.WriteString("]")
 
 		foodListCache = responseJson.Bytes()
+	
+		defer rc.Close()
 	}
 }
 
