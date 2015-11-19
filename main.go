@@ -36,6 +36,7 @@ type userInfo struct{
 var userCache map[string]userInfo
 
 var foodListCache []byte
+var tokenCache map[string]int
 
 
 type foodItem struct{
@@ -130,6 +131,8 @@ func initCache() {
 			Password: password,
 		}
 	}
+
+	tokenCache = make(map[string]int, 10000)
 }
 
 func main() {
@@ -181,13 +184,15 @@ func loginHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		userEntity, isHave := userCache[input.Username]
 		if isHave && userEntity.Password == input.Password {
 			rc := redisPool.Get()
-			defer rc.Close()
 			
 			token := getToken()
 			rc.Do("HSET", "token", token, userEntity.Id)
+			tokenCache[token] = userEntity.Id
 			
 			responseJson := fmt.Sprintf("{\"user_id\":%d,\"username\":\"%s\",\"access_token\":\"%s\"}", userEntity.Id, input.Username, token)	
 			response(&w, 200, []byte(responseJson))		
+
+			rc.Close()
 		} else {
 			response(&w, 403, []byte(`{"code":"USER_AUTH_FAIL","message":"用户名或密码错误"}`))
 		}
@@ -198,7 +203,6 @@ func foodsHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	uid := checkToken(r)
 	if uid != -1 {
 		rc := redisPool.Get()
-		defer rc.Close()
 
 		values := make([]int, 0, len(foodCache))
 		keys := make([]interface{}, 0, len(foodCache))
@@ -227,6 +231,8 @@ func foodsHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		}
 		responseJson.WriteString("]")
 		response(&w, 200, responseJson.Bytes())
+
+		rc.Close()
 	} else {
 		responseInvalidToken(&w)
 	}
@@ -251,12 +257,14 @@ func postCartHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params
 	uid := checkToken(r)
 	if uid != -1 {
 		rc := redisPool.Get()
-		defer rc.Close()
 
 		token := getToken()
 		rc.Do("HSET", "cart:" + token, "user_id", uid)
+
 	   	responseJson := fmt.Sprintf("{\"cart_id\":\"%s\"}", token)
 		response(&w, 200, []byte(responseJson))
+
+		rc.Close()
 	} else {
 		responseInvalidToken(&w)
 	}
@@ -285,7 +293,6 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 			response(&w, 404, []byte(`{"code":"FOOD_NOT_FOUND","message":"食物不存在"}`))
 		} else {
 			rc := redisPool.Get()
-			defer rc.Close()
 
 			res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:" + cid))
 			if len(res) == 0 {
@@ -315,6 +322,8 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 					response(&w, 204, []byte(``))
 				}
 			}
+
+			rc.Close()
 		}
 	} else {
 		responseInvalidToken(&w)
@@ -329,7 +338,6 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 	uid := checkToken(r)
 	if uid != -1 {
 		rc := redisPool.Get()
-		defer rc.Close()
 
 		oid, _ := redis.String(rc.Do("HGET", "order", uid))
 		if len(oid) != 0 {
@@ -429,6 +437,8 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 				}
 			}
 		}
+
+		rc.Close()
 	} else {
 		responseInvalidToken(&w)
 	}
@@ -438,10 +448,11 @@ func getOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params
 	uid := checkToken(r)
 	if uid != -1 {
 		rc := redisPool.Get()
-		defer rc.Close()
 
 		oj, _ := redis.String(rc.Do("HGET", "order", uid))
 		response(&w, 200, []byte("[" + oj + "]"))
+
+		rc.Close()
 	} else {
 		responseInvalidToken(&w)
 	}
@@ -452,7 +463,6 @@ func adminHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 
 	if userCache["root"].Id == uid {
 		rc := redisPool.Get()
-		defer rc.Close()
 
 		res, _ := redis.Values(rc.Do("HGETALL", "order"))
 		var arr []string
@@ -469,38 +479,34 @@ func adminHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		responseJson.WriteString("]")
 
 		response(&w, 200, responseJson.Bytes())
+
+		rc.Close()
 	} else {
 		responseInvalidToken(&w)
 	}
 }
 
-func getFoodInfo(id int) foodInfo {
-	foodInfo := foodCache[id]
-	if foodCache[id].Count != 0 {
-		rc := redisPool.Get()
-		defer rc.Close()
-
-		count, _ := redis.Int64(rc.Do("GET", "food_count:" + strconv.Itoa(id)))
-		foodInfo.Count = min(int(count), foodInfo.Count)
-		foodCache[id] = foodInfo
-	}
-	return foodInfo
-}
-
 func checkToken(r *http.Request) int {
-	rc := redisPool.Get()
-	defer rc.Close()
-	token := r.Header.Get("Access-Token")
+	token := r.FormValue("access_token")
 	if token == "" {
-		token = r.FormValue("access_token")
+		println("Err")
+		token = r.Header.Get("Access-Token")
 	}
 
-	ret, err := redis.Int64(rc.Do("HGET", "token", token))
-	if err != nil {
-		return -1
+	ret, isHave := tokenCache[token]
+	if !isHave {
+		println("Miao")
+		rc := redisPool.Get()
+		id, err := redis.Int64(rc.Do("HGET", "token", token))
+		rc.Close()
+		if err != nil {
+			return -1
+		}
+		ret = int(id)
+		tokenCache[token] = ret
 	}
 
-	return int(ret)
+	return ret
 }
 
 var foodListUpdateTimes = 0
@@ -539,7 +545,7 @@ func updatefoodList() {
 
 		foodListCache = responseJson.Bytes()
 	
-		defer rc.Close()
+		rc.Close()
 	}
 }
 
