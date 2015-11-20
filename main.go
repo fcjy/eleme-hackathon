@@ -15,6 +15,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/garyburd/redigo/redis"
 	"github.com/julienschmidt/httprouter"
+	"runtime"
 )
 
 const localMultVmTest = false
@@ -60,9 +61,9 @@ func init() {
     }
 
     redisPool = &redis.Pool{
-        MaxIdle: 1024,
-        MaxActive: 2048,
-        IdleTimeout: 600 * time.Second,
+        MaxIdle: 256,
+        MaxActive: 512,
+        IdleTimeout: 300 * time.Second,
         Dial: func() (redis.Conn, error) {
             c, err := redis.Dial("tcp", rdHost + ":" + rdPort)
             if err != nil {
@@ -136,6 +137,8 @@ func initCache() {
 }
 
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
 	defer func(){
 		if err := recover(); err != nil{
 			log.Println(err);
@@ -484,13 +487,11 @@ func adminHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 func checkToken(r *http.Request) int {
 	token := r.FormValue("access_token")
 	if token == "" {
-		println("Err")
 		token = r.Header.Get("Access-Token")
 	}
 
 	ret, isHave := tokenCache[token]
 	if !isHave {
-		println("Miao")
 		rc := redisPool.Get()
 		id, err := redis.Int64(rc.Do("HGET", "token", token))
 		rc.Close()
