@@ -18,7 +18,7 @@ import (
 	"runtime"
 )
 
-const localMultVmTest = false
+const localMultVmTest = true
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 const tokenLength = 24
 
