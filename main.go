@@ -17,7 +17,7 @@ import (
 	"github.com/julienschmidt/httprouter"
 )
 
-const localMultVmTest = true
+const localMultVmTest = false
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 const tokenLength = 24
 
@@ -187,12 +187,11 @@ func loginHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 			
 			token := getToken()
 			rc.Do("HSET", "token", token, userEntity.Id)
+			rc.Close()
 			tokenCache[token] = userEntity.Id
 			
 			responseJson := fmt.Sprintf("{\"user_id\":%d,\"username\":\"%s\",\"access_token\":\"%s\"}", userEntity.Id, input.Username, token)	
 			response(&w, 200, []byte(responseJson))		
-
-			rc.Close()
 		} else {
 			response(&w, 403, []byte(`{"code":"USER_AUTH_FAIL","message":"用户名或密码错误"}`))
 		}
@@ -210,6 +209,7 @@ func foodsHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	        keys = append(keys, "food_count:" + strconv.Itoa(k))
 	    }
 		res, _ := redis.Values(rc.Do("MGET", keys...))
+		rc.Close()
 		redis.ScanSlice(res, &values)
 
 		responseJson := new(bytes.Buffer)
@@ -231,8 +231,6 @@ func foodsHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		}
 		responseJson.WriteString("]")
 		response(&w, 200, responseJson.Bytes())
-
-		rc.Close()
 	} else {
 		responseInvalidToken(&w)
 	}
@@ -260,11 +258,10 @@ func postCartHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params
 
 		token := getToken()
 		rc.Do("HSET", "cart:" + token, "user_id", uid)
+		rc.Close()
 
 	   	responseJson := fmt.Sprintf("{\"cart_id\":\"%s\"}", token)
 		response(&w, 200, []byte(responseJson))
-
-		rc.Close()
 	} else {
 		responseInvalidToken(&w)
 	}
@@ -319,11 +316,10 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
                     } else {
                         rc.Do("HDEL", "cart:" + cid, input.FoodId)
                     }
+                    rc.Close()
 					response(&w, 204, []byte(``))
 				}
 			}
-
-			rc.Close()
 		}
 	} else {
 		responseInvalidToken(&w)
@@ -450,9 +446,9 @@ func getOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params
 		rc := redisPool.Get()
 
 		oj, _ := redis.String(rc.Do("HGET", "order", uid))
-		response(&w, 200, []byte("[" + oj + "]"))
-
 		rc.Close()
+
+		response(&w, 200, []byte("[" + oj + "]"))
 	} else {
 		responseInvalidToken(&w)
 	}
@@ -465,6 +461,7 @@ func adminHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		rc := redisPool.Get()
 
 		res, _ := redis.Values(rc.Do("HGETALL", "order"))
+		rc.Close()
 		var arr []string
 		redis.ScanSlice(res, &arr)
 
@@ -479,8 +476,6 @@ func adminHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		responseJson.WriteString("]")
 
 		response(&w, 200, responseJson.Bytes())
-
-		rc.Close()
 	} else {
 		responseInvalidToken(&w)
 	}
@@ -522,6 +517,7 @@ func updatefoodList() {
 	        keys = append(keys, "food_count:" + strconv.Itoa(k))
 	    }
 		res, _ := redis.Values(rc.Do("MGET", keys...))
+		rc.Close()
 		redis.ScanSlice(res, &values)
 
 		responseJson := new(bytes.Buffer)
@@ -544,8 +540,6 @@ func updatefoodList() {
 		responseJson.WriteString("]")
 
 		foodListCache = responseJson.Bytes()
-	
-		rc.Close()
 	}
 }
 
