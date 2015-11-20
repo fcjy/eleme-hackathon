@@ -319,10 +319,11 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
                     } else {
                         rc.Do("HDEL", "cart:" + cid, input.FoodId)
                     }
-                    rc.Close()
 					response(&w, 204, []byte(``))
 				}
 			}
+			
+			rc.Close()
 		}
 	} else {
 		responseInvalidToken(&w)
