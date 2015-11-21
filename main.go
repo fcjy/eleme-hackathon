@@ -20,9 +20,15 @@ import (
 
 const localMultVmTest = false
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+const (
+    letterIdxBits = 6                    // 6 bits to represent a letter index
+    letterIdxMask = 1<<letterIdxBits - 1 // All 1-bits, as many as letterIdxBits
+    letterIdxMax  = 63 / letterIdxBits   // # of letter indices fitting in 63 bits
+)
 const tokenLength = 24
 
 var redisPool *redis.Pool
+var randSrc rand.Source
 
 type foodInfo struct{
 	Count int
@@ -52,7 +58,7 @@ type orderStruct struct{
 }
 
 func init() {
-    rand.Seed(time.Now().UTC().UnixNano())	
+	randSrc = rand.NewSource(time.Now().UnixNano())
 	
     rdHost := os.Getenv("REDIS_HOST")
     rdPort := os.Getenv("REDIS_PORT")
@@ -364,15 +370,9 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 					response(&w, 401, []byte(`{"code":"NOT_AUTHORIZED_TO_ACCESS_CART","message":"无权限访问指定的篮子"}`))
 				} else {
 					foods := make([]interface{}, 0, 3)
-					for key, value := range res {
+					for key, _ := range res {
 						if key != "user_id" {
 							foods = append(foods, "food_count:" + key)
-
-							fid, _ := strconv.Atoi(key)
-							if foodCache[fid].Count < int(value) {
-								response(&w, 403, []byte(`{"code":"FOOD_OUT_OF_STOCK","message":"食物库存不足"}`))
-								return								
-							}
 						}
 					}
 
@@ -392,6 +392,8 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 							if counts[i] < 0 {
 								rc.Do("UNWATCH", foods...)
 								response(&w, 403, []byte(`{"code":"FOOD_OUT_OF_STOCK","message":"食物库存不足"}`))
+
+								rc.Close()
 								return
 							} else {
 								toRedis = append(toRedis, foods[i], counts[i])
@@ -403,14 +405,6 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 						queued, _ := rc.Do("EXEC")
 
 						if queued != nil {
-							for i := 0; i < len(foods); i++ {
-								key, _ := foods[i].(string)
-								id, _ := strconv.Atoi(key[11:len(key)])
-								foodCache[id] = foodInfo{
-									Price: foodCache[id].Price,
-									Count: min(counts[i], foodCache[id].Count),
-								}
-							}
 							break
 						}
 					}
@@ -564,11 +558,21 @@ func responseMalformedJson(w *http.ResponseWriter) {
 
 func getToken() string {
     b := make([]byte, tokenLength)
-    for i := range b {
-        b[i] = letterBytes[rand.Int63() % int64(len(letterBytes))]
+    // A src.Int63() generates 63 random bits, enough for letterIdxMax characters!
+    for i, cache, remain := tokenLength-1, randSrc.Int63(), letterIdxMax; i >= 0; {
+        if remain == 0 {
+            cache, remain = randSrc.Int63(), letterIdxMax
+        }
+        if idx := int(cache & letterIdxMask); idx < len(letterBytes) {
+            b[i] = letterBytes[idx]
+            i--
+        }
+        cache >>= letterIdxBits
+        remain--
     }
+
     return string(b)
-}
+}	
 
 func min(x, y int) int {
 	if x < y {
