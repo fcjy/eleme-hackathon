@@ -255,7 +255,7 @@ func postCartHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params
 
 	uid := checkToken(r)
 	if uid != -1 {
-		token := rTokenCache[uid]
+		token := fmt.Sprintf("%s%09d", rTokenCache[uid], time.Now().UnixNano() % 1000000000)
 	   	responseJson := fmt.Sprintf("{\"cart_id\":\"%s\"}", token)
 		response(&w, 200, []byte(responseJson))
 	} else {
@@ -269,10 +269,15 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 		Count int `json:"count"`
 	}
 
-    cid := ps.ByName("cid")
     uid := checkToken(r)
-
 	if uid != -1 {
+	    cid := ps.ByName("cid")
+	    if len(cid) < 9 {
+	    	response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
+	    	return
+	    }
+	    cuid := cid[0:len(cid)-9]
+
 		decoder := json.NewDecoder(r.Body)
 		var input inputData
 		err := decoder.Decode(&input)
@@ -285,9 +290,9 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 		} else if _, isHave := foodCache[input.FoodId]; !isHave {
 			response(&w, 404, []byte(`{"code":"FOOD_NOT_FOUND","message":"食物不存在"}`))
 		} else {
-			if _, isHave := tokenCache[cid]; isHave == false {
+			if _, isHave := tokenCache[cuid]; isHave == false {
 				response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
-			} else if uid != tokenCache[cid] {
+			} else if uid != tokenCache[cuid] {
 				response(&w, 401, []byte(`{"code":"NOT_AUTHORIZED_TO_ACCESS_CART","message":"无权限访问指定的篮子"}`))
 			} else {
 				rc := redisPool.Get()
@@ -344,9 +349,10 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 		    		responseMalformedJson(&w)   			
 				}
 			} else {
-				if _, isHave := tokenCache[input.CartId]; isHave == false {
+				cuid := input.CartId[0:len(input.CartId)-9]
+				if _, isHave := tokenCache[cuid]; isHave == false {
 					response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
-				} else if uid != tokenCache[input.CartId] {
+				} else if uid != tokenCache[cuid] {
 					response(&w, 401, []byte(`{"code":"NOT_AUTHORIZED_TO_ACCESS_CART","message":"无权限访问指定的篮子"}`))
 				} else {
 					res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:" + input.CartId))
@@ -441,10 +447,10 @@ func adminHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		responseJson := new(bytes.Buffer)
 		responseJson.WriteString("[")
 		for i := 0; i < len(arr); i += 2 {
-			responseJson.WriteString(arr[i + 1])
 			if i != 0 {
 				responseJson.WriteString(",")
-			}
+			}			
+			responseJson.WriteString(arr[i + 1])
 		}
 		responseJson.WriteString("]")
 
