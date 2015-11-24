@@ -344,12 +344,12 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 		    		responseMalformedJson(&w)   			
 				}
 			} else {
-				res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:" + input.CartId))
 				if _, isHave := tokenCache[input.CartId]; isHave == false {
 					response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
 				} else if uid != tokenCache[input.CartId] {
 					response(&w, 401, []byte(`{"code":"NOT_AUTHORIZED_TO_ACCESS_CART","message":"无权限访问指定的篮子"}`))
 				} else {
+					res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:" + input.CartId))
 					foods := make([]interface{}, 0, 3)
 					for key, _ := range res {
 						foods = append(foods, key)
