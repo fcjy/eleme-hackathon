@@ -349,6 +349,10 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 		    		responseMalformedJson(&w)   			
 				}
 			} else {
+				total := 0
+				itemsBuffer := new(bytes.Buffer)
+				itemsBuffer.WriteString("[")
+
 				cuid := input.CartId[0:len(input.CartId)-9]
 				if _, isHave := tokenCache[cuid]; isHave == false {
 					response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
@@ -357,8 +361,16 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 				} else {
 					res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:" + input.CartId))
 					foods := make([]interface{}, 0, 3)
-					for key, _ := range res {
+					for key, value := range res {
 						foods = append(foods, key)
+
+						fid, _ := strconv.Atoi(key)
+						total += foodCache[fid].Price * int(value)
+						if itemsBuffer.Len() == 1 {
+							itemsBuffer.WriteString(fmt.Sprintf("{\"food_id\":%d,\"count\":%d}", fid, int(value)))
+						} else {
+							itemsBuffer.WriteString(fmt.Sprintf(",{\"food_id\":%d,\"count\":%d}", fid, int(value)))
+						}
 					}
 
 					for {
@@ -392,24 +404,9 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 					}
 
 					// success
-					items := make([]foodItem, 0, len(foods))
-					total := 0
-					for key, value := range res {
-						fid, _ := strconv.Atoi(key)
-						items = append(items, foodItem{
-							FoodId: fid,
-							Count: int(value),
-						})
-						total += foodCache[fid].Price * int(value)
-					}
+					itemsBuffer.WriteString("]")
 					orderToken := rTokenCache[uid]
-					order := orderStruct{
-						OrderId: orderToken,
-						UserId: uid,
-						Items: items,
-						Total: total,
-					}
-					orderJson, _ := json.Marshal(&order)
+					orderJson := fmt.Sprintf("{\"id\":\"%s\",\"user_id\":%d,\"items\":%s,\"total\":%d}", orderToken, uid, itemsBuffer.String(), total)
 					rc.Do("HSET", "order",  orderToken, orderJson)
 					response(&w, 200, []byte("{\"id\":\"" + orderToken + "\"}"))
 				}
