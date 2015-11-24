@@ -48,13 +48,13 @@ REQUEST_FAILURE_KEY = "{}:request_failure".format(KEY_PREFIX)
 REQ_FINISH_TIME_KEY = "{}:req_finish_time".format(KEY_PREFIX)
 ORDER_FINISH_TIME_KEY = "{}:order_finish_time".format(KEY_PREFIX)
 
-redis_store = redis.Redis(host='192.168.50.1', port=6379)
+redis_store = redis.Redis()
 users, foods = {}, []
 
 
 @contextlib.contextmanager
 def db_query():
-    db = pymysql.connect(host=os.getenv("DB_HOST", "192.168.50.1"),
+    db = pymysql.connect(host=os.getenv("DB_HOST", "localhost"),
                          port=int(os.getenv("DB_PORT", 3306)),
                          user=os.getenv("DB_USER", "root"),
                          passwd=os.getenv("DB_PASS", "toor"),
@@ -124,25 +124,27 @@ class Query(object):
         headers["Content-Type"] = "application/json"
 
         start = time.time()
-        self.client.request(method, url, body=json.dumps(data),
-                            headers=headers)
-        response = self.client.getresponse()
-        status = response.status
-        data = response.read().decode("utf-8")
-        self.client.close()
+        status = None
+        try:
+            self.client.request(method, url, body=json.dumps(data),
+                                headers=headers)
+            response = self.client.getresponse()
+            status = response.status
+            data = response.read().decode("utf-8")
+            self.client.close()
+            return {"status": status, "data": safe_loads(data)}
+        finally:
+            now = time.time()
+            elapsed = now - start
 
-        now = time.time()
-        elapsed = now - start
-
-        with redis_store.pipeline() as p:
-            if status in (200, 204):
-                p.incr(REQUEST_SUCCESS_KEY)
-                p.lpush(REQ_FINISH_TIME_KEY, now)
-            else:
-                p.incr(REQUEST_FAILURE_KEY)
-            p.lpush(REQ_RESP_TIME_KEY, elapsed)
-            p.execute()
-        return {"status": status, "data": safe_loads(data)}
+            with redis_store.pipeline() as p:
+                if status in (200, 204):
+                    p.incr(REQUEST_SUCCESS_KEY)
+                    p.lpush(REQ_FINISH_TIME_KEY, now)
+                else:
+                    p.incr(REQUEST_FAILURE_KEY)
+                p.lpush(REQ_RESP_TIME_KEY, elapsed)
+                p.execute()
 
     def url(self, path):
         assert self.access_token
@@ -250,6 +252,7 @@ def thread(host, port, threads, num):
     pool = ThreadPool(threads)
     for _ in range(num):
         pool.apply_async(job, (host, port))
+        time.sleep(0.001)
     pool.close()
     pool.join()
 
@@ -400,7 +403,7 @@ def main():
     total_time = work(
         args.host, args.port, args.processes, args.threads, args.num)
 
-    report(args.processes, args.threads, total_time, args.num)
+    report(args.processes, args.threads, total_time, float(args.num))
 
 
 if __name__ == "__main__":
