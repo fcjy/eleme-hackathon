@@ -16,6 +16,7 @@ import (
 	"github.com/julienschmidt/httprouter"
 	"runtime"
 	"hash/fnv"
+	"math/rand"
 )
 
 const localMultVmTest = true
@@ -57,8 +58,8 @@ func init() {
     }
 
     redisPool = &redis.Pool{
-        MaxIdle: 512,
-        MaxActive: 1024,
+        MaxIdle: 24,
+        MaxActive: 24,
         IdleTimeout: 300 * time.Second,
         Dial: func() (redis.Conn, error) {
             c, err := redis.Dial("tcp", rdHost + ":" + rdPort)
@@ -86,7 +87,7 @@ func initCache() {
     defer db.Close();
 	rows, _ := db.Query("select * from food")
 	defer rows.Close()
-	rc := redisPool.Get()
+	rc := getRC()
 	defer rc.Close()
 
 	foodCache = make(map[int]foodInfo)
@@ -141,6 +142,7 @@ func initCache() {
 }
 
 func main() {
+	rand.Seed(time.Now().UTC().UnixNano())
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	defer func(){
@@ -207,7 +209,7 @@ func foodsHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	        keys = append(keys, k)
 	    }
 
-	    rc := redisPool.Get()
+	    rc := getRC()
 	    defer rc.Close()
 
 		res, _ := redis.Values(rc.Do("MGET", keys...))
@@ -295,7 +297,7 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 			} else if uid != tokenCache[cuid] {
 				response(&w, 401, []byte(`{"code":"NOT_AUTHORIZED_TO_ACCESS_CART","message":"无权限访问指定的篮子"}`))
 			} else {
-				rc := redisPool.Get()
+				rc := getRC()
 	    		defer rc.Close()
 				res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:" + cid))
 
@@ -332,7 +334,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 
 	uid := checkToken(r)
 	if uid != -1 {
-		rc := redisPool.Get()
+		rc := getRC()
 		defer rc.Close()
 
 		oid, _ := redis.String(rc.Do("HGET", "order", rTokenCache[uid]))
@@ -373,6 +375,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 						}
 					}
 
+					waitTime := 1
 					for {
 						rc.Do("WATCH", foods...)
 
@@ -400,6 +403,12 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 
 						if queued != nil {
 							break
+						} else {
+							time.Sleep(time.Duration(waitTime - rand.Intn(waitTime)) * time.Millisecond)
+							waitTime *= 2
+							if waitTime > 64 {
+								waitTime = 16
+							}
 						}
 					}
 
@@ -420,7 +429,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 func getOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	uid := checkToken(r)
 	if uid != -1 {
-		rc := redisPool.Get()
+		rc := getRC()
 		defer rc.Close()
 
 		oj, _ := redis.String(rc.Do("HGET", "order", rTokenCache[uid]))
@@ -434,7 +443,7 @@ func adminHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	uid := checkToken(r)
 
 	if userCache["root"].Id == uid {
-		rc := redisPool.Get()
+		rc := getRC()
 		defer rc.Close()
 
 		res, _ := redis.Values(rc.Do("HGETALL", "order"))
@@ -476,7 +485,7 @@ func updatefoodList() {
 	foodListUpdateTimes++
 
 	if foodListUpdateTimes % 500 == 0 {
-		rc := redisPool.Get()
+		rc := getRC()
 		defer rc.Close()
 
 		values := make([]int, 0, len(foodCache))
@@ -560,4 +569,20 @@ func hash(s string) string {
     h := fnv.New32a()
     h.Write([]byte(s))
     return fmt.Sprint(h.Sum32())
+}
+
+func getRC() redis.Conn {
+	waitTime := 1
+	for {
+		rc := redisPool.Get()
+		if rc.Err() != nil {
+			time.Sleep(time.Duration(waitTime - rand.Intn(waitTime)) * time.Millisecond)
+			waitTime = waitTime * 2
+			if waitTime > 64 {
+				waitTime = 16
+			}
+			continue
+		}
+		return rc
+	}
 }
