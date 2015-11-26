@@ -13,17 +13,23 @@ Vagrant.configure(2) do |config|
     vm1.vm.network :forwarded_port, guest: 6379, host: 6379
     vm1.vm.network :forwarded_port, guest: 3306, host: 3306
     vm1.vm.network :forwarded_port, guest: 8080, host: 8080
+  
+    config.vm.provider "virtualbox" do |vb|
+      vb.customize ["modifyvm", :id, "--memory", "2048"]
+      vb.customize ["modifyvm", :id, "--cpus", "4"]
+    end  
   end
 
   config.vm.define "vm2" do |vm2|
     vm2.vm.network "private_network", ip: "192.168.50.2"
+
+    config.vm.provider "virtualbox" do |vb|
+      vb.customize ["modifyvm", :id, "--memory", "2048"]
+      vb.customize ["modifyvm", :id, "--cpus", "2"]
+    end
   end
 
   # config.vm.box_check_update = false
-  config.vm.provider "virtualbox" do |vb|
-    vb.customize ["modifyvm", :id, "--memory", "1024"]
-    vb.customize ["modifyvm", :id, "--cpus", "2"]
-  end
 
   config.vm.provision "shell",
     inline: "initctl emit vagrant-mounted",
