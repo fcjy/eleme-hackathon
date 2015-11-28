@@ -70,8 +70,8 @@ func init() {
     }
 
     redisPool = &redis.Pool{
-        MaxIdle: 64,
-        MaxActive: 64,
+        MaxIdle: 169,
+        MaxActive: 169,
         IdleTimeout: 300 * time.Second,
         Dial: func() (redis.Conn, error) {
         	for {
@@ -105,8 +105,8 @@ func initCache() {
 	defer rc.Close()
 
 	foodNum = 0
-	foodPrice = make([]int, 10000)
-	foodCount = make([]int, 10000)
+	foodPrice = make([]int, 1000)
+	foodCount = make([]int, 1000)
 	foodListBuf := new(bytes.Buffer)
 	foodListBuf.WriteString("[")
 	isBeg := true
@@ -183,7 +183,7 @@ func main() {
 	router := httprouter.New()
 
 	router.POST("/login", loginHandler)
-	router.GET("/foods", foodsHandlerFromCache)
+	router.GET("/foods", foodsHandler)
 	router.POST("/carts", postCartHandler)
 	router.PATCH("/carts/:cid", patchCartHandler)
 	router.POST("/orders", postOrderHandler)
@@ -219,10 +219,16 @@ func loginHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	}
 }
 
-func foodsHandlerFromCache(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+var foodListUpdateTimes = 0
+func foodsHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	uid := checkToken(r)
 	if uid != -1 {
-		updatefoodList()
+		foodListUpdateTimes++
+
+		if foodListUpdateTimes % 50 == 0 {
+			updatefoodListFromRemote()
+		}
+
 		response(&w, 200, foodListCache)
 	} else {
 		responseInvalidToken(&w)
@@ -378,8 +384,9 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 							fid, _ := strconv.Atoi(key)
 							foodCount[fid] -= int(value)
 
-							rc.Do("DECRBY", key, value)
+							rc.Send("DECRBY", key, value)
 						}
+						rc.Flush()
 					} else {
 						for {
 							rc.Do("WATCH", foods...)
@@ -485,37 +492,46 @@ func checkToken(r *http.Request) int {
 	return ret
 }
 
-var foodListUpdateTimes = 0
-func updatefoodList() {
-	foodListUpdateTimes++
-
-	if foodListUpdateTimes % 50 == 0 {
-		values := make([]int, 0, foodNum)
-		keys := make([]interface{}, 0, foodNum)
-	    for i := 1; i <= foodNum; i++ {
-	        keys = append(keys, i)
-	    }
-	    rc := *(getRC())
-		res, _ := redis.Values(rc.Do("MGET", keys...))
-		rc.Close()
-		redis.ScanSlice(res, &values)
-
-		responseJson := new(bytes.Buffer)
-		responseJson.WriteString("[")
-		for i := 0; i < len(keys); i++ {
-			id, _ := keys[i].(int)
-			foodCount[id] = values[i]
-
-			foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", id, foodPrice[id], foodCount[id])
-			if i != 0 {
-				responseJson.WriteString(",")
-			}
-			responseJson.WriteString(foodJson)
+func updatefoodListFromLocal() {
+	responseJson := new(bytes.Buffer)
+	responseJson.WriteString("[")
+	for i := 1; i <= foodNum; i++ {
+		foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", i, foodPrice[i], foodCount[i])
+		if i != 0 {
+			responseJson.WriteString(",")
 		}
-		responseJson.WriteString("]")
-
-		foodListCache = responseJson.Bytes()
+		responseJson.WriteString(foodJson)
 	}
+	responseJson.WriteString("]")
+	foodListCache = responseJson.Bytes()
+}
+
+func updatefoodListFromRemote() {
+	values := make([]int, 0, foodNum)
+	keys := make([]interface{}, 0, foodNum)
+    for i := 1; i <= foodNum; i++ {
+        keys = append(keys, i)
+    }
+    rc := *(getRC())
+	res, _ := redis.Values(rc.Do("MGET", keys...))
+	rc.Close()
+	redis.ScanSlice(res, &values)
+
+	responseJson := new(bytes.Buffer)
+	responseJson.WriteString("[")
+	for i := 0; i < len(keys); i++ {
+		id, _ := keys[i].(int)
+		foodCount[id] = values[i]
+
+		foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", id, foodPrice[id], foodCount[id])
+		if i != 0 {
+			responseJson.WriteString(",")
+		}
+		responseJson.WriteString(foodJson)
+	}
+	responseJson.WriteString("]")
+
+	foodListCache = responseJson.Bytes()
 }
 
 func response(w *http.ResponseWriter, code int, json []byte) {
