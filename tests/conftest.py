@@ -38,8 +38,6 @@ def _token(username, password):
 # basic conf
 conf = _conf()
 url = conf["url"]
-url1 = "http://192.168.50.2:8080"
-url2 = "http://192.168.50.1:8080"
 
 # admin info
 admin_username = conf["username"]
@@ -88,49 +86,25 @@ _session = requests.session()
 _session.headers.update({"Content-type": "application/json"})
 _session.mount("http://", requests.adapters.HTTPAdapter(max_retries=10))
 
-times = 0
 
 def json_get(path, tk):
-    global times
-    times += 1
-    if times % 2 == 0:
-        return _session.get(url1 + path, headers={"Access-Token": tk}, timeout=3)
-    else:
-        return _session.get(url2 + path, headers={"Access-Token": tk}, timeout=3)
+    return _session.get(url + path, headers={"Access-Token": tk}, timeout=3)
 
 
 def json_post(path, tk, data=None):
-    global times
-    times += 1
-    if times % 2 == 0:
-        return _session.post(
-            url1 + path,
-            json=data,
-            headers={"Access-Token": tk},
-            timeout=3)
-    else:
-        return _session.post(
-            url2 + path,
-            json=data,
-            headers={"Access-Token": tk},
-            timeout=3)
+    return _session.post(
+        url + path,
+        json=data,
+        headers={"Access-Token": tk},
+        timeout=3)
 
 
 def json_patch(path, tk, data):
-    global times
-    times += 1
-    if times % 2 == 0:
-        return _session.patch(
-            url1 + path,
-            json=data,
-            headers={"Access-Token": tk},
-            timeout=3)
-    else:
-        return _session.patch(
-            url2 + path,
-            json=data,
-            headers={"Access-Token": tk},
-            timeout=3)
+    return _session.patch(
+        url + path,
+        json=data,
+        headers={"Access-Token": tk},
+        timeout=3)
 
 
 def _token_gen():
