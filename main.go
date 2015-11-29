@@ -70,14 +70,14 @@ func init() {
     }
 
     redisPool = &redis.Pool{
-        MaxIdle: 169,
-        MaxActive: 169,
+        MaxIdle: 512,
+        MaxActive: 512,
         IdleTimeout: 300 * time.Second,
         Dial: func() (redis.Conn, error) {
         	for {
 		        c, err := redis.Dial("tcp", rdHost + ":" + rdPort)
 		        if err != nil {
-		        	time.Sleep(time.Duration(16) * time.Millisecond)
+		        	time.Sleep(time.Duration(8) * time.Millisecond)
 		        }
 		        return c, err
         	}
@@ -148,12 +148,13 @@ func initCache() {
 	}
 	
 	tokenCache = make(map[string]int)
-	rTokenCache = make([]string, 666666)
-	for i := 0; i < 666666; i++ {
+    rTokenCache = make([]string, 0, 60000)
+    rTokenCache = append(rTokenCache, "");
+    for i := 1; i <= len(userCache); i++ {
 		hashStr := fmt.Sprintf("token:%d", i)
 		k := hash(hashStr)
 		tokenCache[k] = i
-		rTokenCache[i] = k
+        rTokenCache = append(rTokenCache, k)
 	}
 
 	println("food:", foodNum)
@@ -225,7 +226,7 @@ func foodsHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	if uid != -1 {
 		foodListUpdateTimes++
 
-		if foodListUpdateTimes % 50 == 0 {
+		if foodListUpdateTimes % 200 == 0 {
 			updatefoodListFromRemote()
 		}
 
@@ -243,8 +244,7 @@ func postCartHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params
 
 	uid := checkToken(r)
 	if uid != -1 {
-		token := fmt.Sprintf("%s%09d", rTokenCache[uid], time.Now().UnixNano() % 1000000000)
-	   	responseJson := fmt.Sprintf("{\"cart_id\":\"%s\"}", token)
+	   	responseJson := fmt.Sprintf("{\"cart_id\":\"%s%09d\"}", rTokenCache[uid], time.Now().UnixNano() % 1000000000)
 		response(&w, 200, []byte(responseJson))
 	} else {
 		responseInvalidToken(&w)
@@ -259,13 +259,6 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 
     uid := checkToken(r)
 	if uid != -1 {
-	    cid := ps.ByName("cid")
-	    if len(cid) < 9 {
-	    	response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
-	    	return
-	    }
-	    cuid := cid[0:len(cid)-9]
-
 		decoder := json.NewDecoder(r.Body)
 		var input inputData
 		err := decoder.Decode(&input)
@@ -278,9 +271,17 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 		} else if !checkFoodId(input.FoodId) {
 			response(&w, 404, []byte(`{"code":"FOOD_NOT_FOUND","message":"食物不存在"}`))
 		} else {
-			if _, isHave := tokenCache[cuid]; isHave == false {
+		    cid := ps.ByName("cid")
+		    if len(cid) < 9 {
+		    	response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
+		    	return
+		    }
+		    uh := cid[0:len(cid)-9]
+            cuid, isHave := tokenCache[uh]
+
+			if isHave == false {
 				response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
-			} else if uid != tokenCache[cuid] {
+			} else if uid != cuid {
 				response(&w, 401, []byte(`{"code":"NOT_AUTHORIZED_TO_ACCESS_CART","message":"无权限访问指定的篮子"}`))
 			} else {
 				rc := *(getRC())
@@ -321,116 +322,125 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 	}
 
 	uid := checkToken(r)
-	if uid != -1 {
+	if uid != -1 {		
+		decoder := json.NewDecoder(r.Body)
+		var input inputData
+		err := decoder.Decode(&input)
+		if err != nil {
+			if err.Error() == "EOF" {
+				responseEemptyRequest(&w)
+			} else {
+	    		responseMalformedJson(&w)   			
+			}
+			return
+		}
+
 		rc := *(getRC())
 		//defer rc.Close()
+		rc.Send("HGET", "order", rTokenCache[uid])
+		rc.Send("HGETALL", "cart:" + input.CartId)
+		rc.Flush()
 
-		oid, _ := redis.String(rc.Do("HGET", "order", rTokenCache[uid]))
+		//oid, _ := redis.String(rc.Do("HGET", "order", rTokenCache[uid]))
+		oid, _ := redis.String(rc.Receive())
 		if len(oid) != 0 {
 			rc.Close()
 			response(&w, 403, []byte(`{"code":"ORDER_OUT_OF_LIMIT","message":"每个用户只能下一单"}`))
 		} else {
-			decoder := json.NewDecoder(r.Body)
-			var input inputData
-			err := decoder.Decode(&input)
-			if err != nil {
+			uh := input.CartId[0:len(input.CartId)-9]
+			cuid, isHave := tokenCache[uh]
+
+			if isHave == false {
 				rc.Close()
-				if err.Error() == "EOF" {
-					responseEemptyRequest(&w)
-				} else {
-		    		responseMalformedJson(&w)   			
-				}
+				response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
+			} else if uid != cuid {
+				rc.Close()
+				response(&w, 401, []byte(`{"code":"NOT_AUTHORIZED_TO_ACCESS_CART","message":"无权限访问指定的篮子"}`))
 			} else {
 				total := 0
 				itemsBuffer := new(bytes.Buffer)
 				itemsBuffer.WriteString("[")
 
-				cuid := input.CartId[0:len(input.CartId)-9]
-				if _, isHave := tokenCache[cuid]; isHave == false {
-					rc.Close()
-					response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
-				} else if uid != tokenCache[cuid] {
-					rc.Close()
-					response(&w, 401, []byte(`{"code":"NOT_AUTHORIZED_TO_ACCESS_CART","message":"无权限访问指定的篮子"}`))
-				} else {
-					res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:" + input.CartId))
-					foods := make([]interface{}, 0, 3)
+				//res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:" + input.CartId))
+				res, _ := redis.Int64Map(rc.Receive())
 
-					simple := true
-					for key, value := range res {
-						fid, _ := strconv.Atoi(key)
-						if foodCount[fid] < int(value) {
-							rc.Close()
-							response(&w, 403, []byte(`{"code":"FOOD_OUT_OF_STOCK","message":"食物库存不足"}`))
-							return
-						}
+				food_id := make([]interface{}, 0, 3)
+				food_count := make([]int, 0, 3)
 
-						foods = append(foods, key)
+				simple := true
+				for k, v := range res {
+					fid, _ := strconv.Atoi(k)
+					food_id = append(food_id, fid)
+					value := int(v)
+					food_count = append(food_count, value)
 
-						total += foodPrice[fid] * int(value)
-						if itemsBuffer.Len() == 1 {
-							itemsBuffer.WriteString(fmt.Sprintf("{\"food_id\":%d,\"count\":%d}", fid, int(value)))
-						} else {
-							itemsBuffer.WriteString(fmt.Sprintf(",{\"food_id\":%d,\"count\":%d}", fid, int(value)))
-						}
-
-						if foodCount[fid] < 100 {
-							simple = false
-						}
+					if foodCount[fid] < value {
+						rc.Close()
+						response(&w, 403, []byte(`{"code":"FOOD_OUT_OF_STOCK","message":"食物库存不足"}`))
+						return
 					}
 
-					if simple {
-						for key, value := range res {
-							fid, _ := strconv.Atoi(key)
-							foodCount[fid] -= int(value)
-
-							rc.Send("DECRBY", key, value)
-						}
-						rc.Flush()
+					total += foodPrice[fid] * value
+					if itemsBuffer.Len() == 1 {
+						itemsBuffer.WriteString(fmt.Sprintf("{\"food_id\":%d,\"count\":%d}", fid, value))
 					} else {
-						for {
-							rc.Do("WATCH", foods...)
+						itemsBuffer.WriteString(fmt.Sprintf(",{\"food_id\":%d,\"count\":%d}", fid, value))
+					}
 
-							counts := make([]int, 0, 3)
-							fc, _ := redis.Values(rc.Do("MGET", foods...))
-							redis.ScanSlice(fc, &counts)
-							
-							toRedis := make([]interface{}, 0, 6)
-							for i := 0; i < len(foods); i++ {
-								id, _ := foods[i].(string)
+					if foodCount[fid] < 64 {
+						simple = false
+					}
+				}
 
-								fid, _ := strconv.Atoi(id)
-								foodCount[fid] = min(foodCount[fid], int(res[id]))
+				if simple {
+					for i := 0; i < len(food_id); i++ {
+						fid := food_id[i].(int)
+						foodCount[fid] -= food_count[i]
+						rc.Send("DECRBY", fid, food_count[i])
+					}
+					rc.Flush()
+				} else {
+					for {
+						rc.Do("WATCH", food_id...)
 
-								counts[i] -= int(res[id])
-								if counts[i] < 0 {
-									rc.Do("UNWATCH", foods...)
-									rc.Close()
-									response(&w, 403, []byte(`{"code":"FOOD_OUT_OF_STOCK","message":"食物库存不足"}`))
-									return
-								} else {
-									toRedis = append(toRedis, foods[i], counts[i])
-								}
-							}
+						counts := make([]int, 0, 3)
+						fc, _ := redis.Values(rc.Do("MGET", food_id...))
+						redis.ScanSlice(fc, &counts)
+						
+						toRedis := make([]interface{}, 0, 6)					
 
-							rc.Send("MULTI")
-							rc.Send("MSET", toRedis...)
-							queued, _ := rc.Do("EXEC")
+						for i := 0; i < len(food_id); i++ {
+							fid, _ := food_id[i].(int)
+							foodCount[fid] = min(foodCount[fid], counts[i])
 
-							if queued != nil {
-								break
+							counts[i] -= food_count[i]
+							if counts[i] < 0 {
+								rc.Do("UNWATCH", food_id...)
+								rc.Close()
+								response(&w, 403, []byte(`{"code":"FOOD_OUT_OF_STOCK","message":"食物库存不足"}`))
+								return
+							} else {
+								toRedis = append(toRedis, food_id[i], counts[i])
 							}
 						}
+
+						rc.Send("MULTI")
+						rc.Send("MSET", toRedis...)
+						queued, _ := rc.Do("EXEC")
+
+						if queued != nil {
+							break
+						}
 					}
-					
-					// success
-					itemsBuffer.WriteString("]")
-					orderToken := rTokenCache[uid]
-					orderJson := fmt.Sprintf("{\"id\":\"%s\",\"user_id\":%d,\"items\":%s,\"total\":%d}", orderToken, uid, itemsBuffer.String(), total)
-					rc.Do("HSET", "order",  orderToken, orderJson)
-					rc.Close()
-					response(&w, 200, []byte("{\"id\":\"" + orderToken + "\"}"))
 				}
+				
+				// success
+				itemsBuffer.WriteString("]")
+				orderToken := rTokenCache[uid]
+				orderJson := fmt.Sprintf("{\"id\":\"%s\",\"user_id\":%d,\"items\":%s,\"total\":%d}", orderToken, uid, itemsBuffer.String(), total)
+				rc.Do("HSET", "order",  orderToken, orderJson)
+				rc.Close()
+				response(&w, 200, []byte("{\"id\":\"" + orderToken + "\"}"))
 			}
 		}
 	} else {
@@ -519,9 +529,9 @@ func updatefoodListFromRemote() {
 
 	responseJson := new(bytes.Buffer)
 	responseJson.WriteString("[")
-	for i := 0; i < len(keys); i++ {
+	for i := 0; i < len(values); i++ {
 		id, _ := keys[i].(int)
-		foodCount[id] = values[i]
+		foodCount[id] = min(foodCount[id], values[i])
 
 		foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", id, foodPrice[id], foodCount[id])
 		if i != 0 {
@@ -591,7 +601,7 @@ func getRC() *redis.Conn {
 	for {
 		rc := redisPool.Get()
 		if rc.Err() != nil {
-			time.Sleep(time.Duration(rand.Intn(16)) * time.Millisecond)
+			time.Sleep(time.Duration(rand.Intn(8)) * time.Millisecond)
 			continue
 		}
 		return &rc
