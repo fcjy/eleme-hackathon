@@ -387,7 +387,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 						itemsBuffer.WriteString(fmt.Sprintf(",{\"food_id\":%d,\"count\":%d}", fid, value))
 					}
 
-					if foodCount[fid] < 64 {
+					if foodCount[fid] < 100 {
 						simple = false
 					}
 				}
