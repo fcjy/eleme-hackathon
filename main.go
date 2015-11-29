@@ -399,6 +399,13 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 						rc.Send("DECRBY", fid, food_count[i])
 					}
 					rc.Flush()
+					if rand.Intn(8) == 0 {
+						for i := 0; i < len(food_id); i++ {
+							fid := food_id[i].(int)
+							newValue, _ := redis.Int64(rc.Receive())
+							foodCount[fid] = min(foodCount[fid], int(newValue))
+						}
+					}
 				} else {
 					for {
 						rc.Do("WATCH", food_id...)
