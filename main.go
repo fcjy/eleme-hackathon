@@ -224,11 +224,18 @@ func updateFoodCount() {
 			id, _ := keys[i].(int)
 			foodCount[id] = values[i]
 
-			foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", id, foodPrice[id], foodCount[id])
+			//foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", id, foodPrice[id], foodCount[id])
 			if i != 0 {
 				responseJson.WriteString(",")
 			}
-			responseJson.WriteString(foodJson)
+			//responseJson.WriteString(foodJson)
+			responseJson.WriteString("{\"id\":")
+			responseJson.WriteString(strconv.Itoa(id))
+			responseJson.WriteString(",\"price\":")
+			responseJson.WriteString(strconv.Itoa(foodPrice[id]))		
+			responseJson.WriteString(",\"stock\":")
+			responseJson.WriteString(strconv.Itoa(foodCount[id]))
+			responseJson.WriteString("}")			
 		}
 		responseJson.WriteString("]")
 		foodListCache = responseJson.Bytes()
@@ -255,8 +262,17 @@ func loginHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	} else {
 		userEntity, isHave := userCache[input.Username]
 		if isHave && userEntity.Password == input.Password {
-			responseJson := fmt.Sprintf("{\"user_id\":%d,\"username\":\"%s\",\"access_token\":\"%s\"}", userEntity.Id, input.Username, rTokenCache[userEntity.Id])	
-			response(&w, 200, []byte(responseJson))
+			responseJson := new(bytes.Buffer)
+			responseJson.WriteString("{\"user_id\":")
+			responseJson.WriteString(strconv.Itoa(userEntity.Id))
+			responseJson.WriteString(",\"username\":\"")
+			responseJson.WriteString(input.Username)		
+			responseJson.WriteString("\",\"access_token\":\"")
+			responseJson.WriteString(rTokenCache[userEntity.Id])
+			responseJson.WriteString("\"}")	
+			response(&w, 200, responseJson.Bytes())			
+			//responseJson := fmt.Sprintf("{\"user_id\":%d,\"username\":\"%s\",\"access_token\":\"%s\"}", userEntity.Id, input.Username, rTokenCache[userEntity.Id])	
+			//response(&w, 200, []byte(responseJson))
 		} else {
 			response(&w, 403, []byte(`{"code":"USER_AUTH_FAIL","message":"用户名或密码错误"}`))
 		}
@@ -396,7 +412,11 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 			} else {
 				total := 0
 				itemsBuffer := new(bytes.Buffer)
-				itemsBuffer.WriteString("[")
+				itemsBuffer.WriteString("{\"id\":\"")
+				itemsBuffer.WriteString(rTokenCache[uid])
+				itemsBuffer.WriteString("\",\"user_id\":")
+				itemsBuffer.WriteString(strconv.Itoa(uid))
+				itemsBuffer.WriteString(",\"items\":[")
 
 				//res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:" + input.CartId))
 				res, _ := redis.Int64Map(rc.Receive())
@@ -418,12 +438,22 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 						return
 					}
 
-					total += foodPrice[fid] * value
-					if itemsBuffer.Len() == 1 {
-						itemsBuffer.WriteString(fmt.Sprintf("{\"food_id\":%d,\"count\":%d}", fid, value))
-					} else {
-						itemsBuffer.WriteString(fmt.Sprintf(",{\"food_id\":%d,\"count\":%d}", fid, value))
+					// if itemsBuffer.Len() == 1 {
+					// 	itemsBuffer.WriteString(fmt.Sprintf("{\"food_id\":%d,\"count\":%d}", fid, value))
+					// } else {
+					// 	itemsBuffer.WriteString(fmt.Sprintf(",{\"food_id\":%d,\"count\":%d}", fid, value))
+					// }
+
+					if total != 0 {
+						itemsBuffer.WriteString(",")
 					}
+					itemsBuffer.WriteString("{\"food_id\":")
+					itemsBuffer.WriteString(strconv.Itoa(fid))
+					itemsBuffer.WriteString(",\"count\":")
+					itemsBuffer.WriteString(strconv.Itoa(value))
+					itemsBuffer.WriteString("}")	
+
+					total += foodPrice[fid] * value
 
 					if foodCount[fid] < 100 {
 						simple = false
@@ -440,10 +470,11 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 					}
 
 					// success
-					itemsBuffer.WriteString("]")
+					itemsBuffer.WriteString("],\"total\":")
+					itemsBuffer.WriteString(strconv.Itoa(total))
+					itemsBuffer.WriteString("}")
 					orderToken := rTokenCache[uid]
-					orderJson := fmt.Sprintf("{\"id\":\"%s\",\"user_id\":%d,\"items\":%s,\"total\":%d}", orderToken, uid, itemsBuffer.String(), total)
-					rc.Send("HSET", "order",  orderToken, orderJson)
+					rc.Send("HSET", "order",  orderToken, itemsBuffer.String())
 					rc.Flush()
 					rc.Close()
 					response(&w, 200, []byte("{\"id\":\"" + orderToken + "\"}"))
@@ -477,12 +508,13 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 							break
 						}
 					}
-
+					
 					// success
-					itemsBuffer.WriteString("]")
+					itemsBuffer.WriteString("],\"total\":")
+					itemsBuffer.WriteString(strconv.Itoa(total))
+					itemsBuffer.WriteString("}")
 					orderToken := rTokenCache[uid]
-					orderJson := fmt.Sprintf("{\"id\":\"%s\",\"user_id\":%d,\"items\":%s,\"total\":%d}", orderToken, uid, itemsBuffer.String(), total)
-					rc.Do("HSET", "order",  orderToken, orderJson)
+					rc.Do("HSET", "order",  orderToken, itemsBuffer.String())
 					rc.Close()
 					response(&w, 200, []byte("{\"id\":\"" + orderToken + "\"}"))
 				}
