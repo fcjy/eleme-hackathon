@@ -70,14 +70,15 @@ func init() {
     }
 
     redisPool = &redis.Pool{
-        MaxIdle: 512,
-        MaxActive: 512,
+        MaxIdle: 256,
+        MaxActive: 256,
         IdleTimeout: 300 * time.Second,
         Dial: func() (redis.Conn, error) {
         	for {
 		        c, err := redis.Dial("tcp", rdHost + ":" + rdPort)
 		        if err != nil {
-		        	time.Sleep(time.Duration(8) * time.Millisecond)
+		        	time.Sleep(time.Duration(2) * time.Millisecond)
+		        	continue
 		        }
 		        return c, err
         	}
@@ -162,14 +163,16 @@ func initCache() {
 }
 
 func main() {
-	rand.Seed(time.Now().UTC().UnixNano())
-	runtime.GOMAXPROCS(runtime.NumCPU())
-
 	defer func(){
 		if err := recover(); err != nil{
 			log.Println(err);
 		}
 	} ()
+
+	rand.Seed(time.Now().UTC().UnixNano())
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	go updateFoodCount();
 
 	host := os.Getenv("APP_HOST")
 	port := os.Getenv("APP_PORT")
@@ -192,6 +195,46 @@ func main() {
 	router.GET("/admin/orders", adminHandler)
 
 	http.ListenAndServe(addr, router)
+}
+
+func updateFoodCount() {
+	values := make([]int, 0, foodNum)
+	keys := make([]interface{}, 0, foodNum)
+    for i := 1; i <= foodNum; i++ {
+        keys = append(keys, i)
+    }
+	
+	rc := *(getRC())
+
+	responseJson := new(bytes.Buffer)
+	for {
+		time.Sleep(time.Duration(16) * time.Millisecond)
+
+		res, err := redis.Values(rc.Do("MGET", keys...))
+		if err != nil {
+			rc.Close()
+			rc = *(getRC())
+			continue
+		}
+		redis.ScanSlice(res, &values)
+		
+		responseJson.Reset();
+		responseJson.WriteString("[")
+		for i := 0; i < foodNum; i++ {
+			id, _ := keys[i].(int)
+			foodCount[id] = values[i]
+
+			foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", id, foodPrice[id], foodCount[id])
+			if i != 0 {
+				responseJson.WriteString(",")
+			}
+			responseJson.WriteString(foodJson)
+		}
+		responseJson.WriteString("]")
+		foodListCache = responseJson.Bytes()
+	}
+
+	rc.Close()
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
@@ -220,16 +263,9 @@ func loginHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	}
 }
 
-var foodListUpdateTimes = 0
 func foodsHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	uid := checkToken(r)
 	if uid != -1 {
-		foodListUpdateTimes++
-
-		if foodListUpdateTimes % 200 == 0 {
-			updatefoodListFromRemote()
-		}
-
 		response(&w, 200, foodListCache)
 	} else {
 		responseInvalidToken(&w)
@@ -268,7 +304,7 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 			} else {
 	    		responseMalformedJson(&w)   			
 			}
-		} else if !checkFoodId(input.FoodId) {
+		} else if input.FoodId <= 0 || input.FoodId > foodNum {
 			response(&w, 404, []byte(`{"code":"FOOD_NOT_FOUND","message":"食物不存在"}`))
 		} else {
 		    cid := ps.ByName("cid")
@@ -290,6 +326,7 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 
 				sum := 0
                 sfid := strconv.Itoa(input.FoodId)
+
                 res[sfid] += int64(input.Count)
                 if res[sfid] < 0 {
                     res[sfid] = 0
@@ -343,7 +380,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 
 		//oid, _ := redis.String(rc.Do("HGET", "order", rTokenCache[uid]))
 		oid, _ := redis.String(rc.Receive())
-		if len(oid) != 0 {
+		if oid != "" {
 			rc.Close()
 			response(&w, 403, []byte(`{"code":"ORDER_OUT_OF_LIMIT","message":"每个用户只能下一单"}`))
 		} else {
@@ -366,6 +403,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 
 				food_id := make([]interface{}, 0, 3)
 				food_count := make([]int, 0, 3)
+				var food_len int
 
 				simple := true
 				for k, v := range res {
@@ -392,20 +430,23 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 					}
 				}
 
+				food_len = len(food_id)
+
 				if simple {
-					for i := 0; i < len(food_id); i++ {
+
+					for i := 0; i < food_len; i++ {
 						fid := food_id[i].(int)
-						foodCount[fid] -= food_count[i]
 						rc.Send("DECRBY", fid, food_count[i])
 					}
+
+					// success
+					itemsBuffer.WriteString("]")
+					orderToken := rTokenCache[uid]
+					orderJson := fmt.Sprintf("{\"id\":\"%s\",\"user_id\":%d,\"items\":%s,\"total\":%d}", orderToken, uid, itemsBuffer.String(), total)
+					rc.Send("HSET", "order",  orderToken, orderJson)
 					rc.Flush()
-					if rand.Intn(8) == 0 {
-						for i := 0; i < len(food_id); i++ {
-							fid := food_id[i].(int)
-							newValue, _ := redis.Int64(rc.Receive())
-							foodCount[fid] = min(foodCount[fid], int(newValue))
-						}
-					}
+					rc.Close()
+					response(&w, 200, []byte("{\"id\":\"" + orderToken + "\"}"))
 				} else {
 					for {
 						rc.Do("WATCH", food_id...)
@@ -416,10 +457,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 						
 						toRedis := make([]interface{}, 0, 6)					
 
-						for i := 0; i < len(food_id); i++ {
-							fid, _ := food_id[i].(int)
-							foodCount[fid] = min(foodCount[fid], counts[i])
-
+						for i := 0; i < food_len; i++ {
 							counts[i] -= food_count[i]
 							if counts[i] < 0 {
 								rc.Do("UNWATCH", food_id...)
@@ -439,15 +477,15 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 							break
 						}
 					}
+
+					// success
+					itemsBuffer.WriteString("]")
+					orderToken := rTokenCache[uid]
+					orderJson := fmt.Sprintf("{\"id\":\"%s\",\"user_id\":%d,\"items\":%s,\"total\":%d}", orderToken, uid, itemsBuffer.String(), total)
+					rc.Do("HSET", "order",  orderToken, orderJson)
+					rc.Close()
+					response(&w, 200, []byte("{\"id\":\"" + orderToken + "\"}"))
 				}
-				
-				// success
-				itemsBuffer.WriteString("]")
-				orderToken := rTokenCache[uid]
-				orderJson := fmt.Sprintf("{\"id\":\"%s\",\"user_id\":%d,\"items\":%s,\"total\":%d}", orderToken, uid, itemsBuffer.String(), total)
-				rc.Do("HSET", "order",  orderToken, orderJson)
-				rc.Close()
-				response(&w, 200, []byte("{\"id\":\"" + orderToken + "\"}"))
 			}
 		}
 	} else {
@@ -509,48 +547,6 @@ func checkToken(r *http.Request) int {
 	return ret
 }
 
-func updatefoodListFromLocal() {
-	responseJson := new(bytes.Buffer)
-	responseJson.WriteString("[")
-	for i := 1; i <= foodNum; i++ {
-		foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", i, foodPrice[i], foodCount[i])
-		if i != 0 {
-			responseJson.WriteString(",")
-		}
-		responseJson.WriteString(foodJson)
-	}
-	responseJson.WriteString("]")
-	foodListCache = responseJson.Bytes()
-}
-
-func updatefoodListFromRemote() {
-	values := make([]int, 0, foodNum)
-	keys := make([]interface{}, 0, foodNum)
-    for i := 1; i <= foodNum; i++ {
-        keys = append(keys, i)
-    }
-    rc := *(getRC())
-	res, _ := redis.Values(rc.Do("MGET", keys...))
-	rc.Close()
-	redis.ScanSlice(res, &values)
-
-	responseJson := new(bytes.Buffer)
-	responseJson.WriteString("[")
-	for i := 0; i < len(values); i++ {
-		id, _ := keys[i].(int)
-		foodCount[id] = min(foodCount[id], values[i])
-
-		foodJson := fmt.Sprintf("{\"id\":%d,\"price\":%d,\"stock\":%d}", id, foodPrice[id], foodCount[id])
-		if i != 0 {
-			responseJson.WriteString(",")
-		}
-		responseJson.WriteString(foodJson)
-	}
-	responseJson.WriteString("]")
-
-	foodListCache = responseJson.Bytes()
-}
-
 func response(w *http.ResponseWriter, code int, json []byte) {
 	(*w).WriteHeader(code)
 	(*w).Write(json)
@@ -566,14 +562,6 @@ func responseEemptyRequest(w *http.ResponseWriter) {
 
 func responseMalformedJson(w *http.ResponseWriter) {
 	response(w, 400, []byte(`{"code":"MALFORMED_JSON","message":"格式错误"}`))
-}
-
-func min(x, y int) int {
-	if x < y {
-		return x
-	} else {
-		return y
-	}
 }
 
 func checkErr(err error) {
@@ -608,7 +596,7 @@ func getRC() *redis.Conn {
 	for {
 		rc := redisPool.Get()
 		if rc.Err() != nil {
-			time.Sleep(time.Duration(rand.Intn(8)) * time.Millisecond)
+			time.Sleep(time.Duration(3) * time.Millisecond)
 			continue
 		}
 		return &rc
