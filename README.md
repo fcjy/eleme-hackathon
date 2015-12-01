@@ -1,4 +1,16 @@
-# Eleme Hackathon Intro
+# Team: fcjy
+It will deploy two vitural machines in mult-vm branch code, so you can do functional test in distributed environment.
+
+In order to improve concurrency, I do something:
+
+* Cache many many things
+* Redis as the only database, no mysql
+* Redis pipeline, "MGET", "MSET"
+* Sacrifice stock consistency, query stock each 16ms in another goroutine, not query stock in the "GET /foods"
+* When all food stock bigger than 100 in a order, use redis command "DECRBY", instead of "WATCH", "MULT", "EXEC"
+
+
+# Offical Introduction
 
 饿了么 Hackathon 2015 初赛信息介绍。
 
