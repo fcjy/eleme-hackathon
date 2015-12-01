@@ -1,23 +1,23 @@
 package main
 
 import (
-	"time"
-	"log"
-	"fmt"
 	"bytes"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"github.com/garyburd/redigo/redis"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/julienschmidt/httprouter"
+	"hash/fnv"
+	"log"
+	"math/rand"
 	"net"
 	"net/http"
-	"strconv"
 	"os"
-	"encoding/json"
-	"database/sql"
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/garyburd/redigo/redis"
-	"github.com/julienschmidt/httprouter"
 	"runtime"
-	"hash/fnv"
-	"math/rand"
+	"strconv"
 	"syscall"
+	"time"
 )
 
 const localMultVmTest = false
@@ -28,78 +28,78 @@ var foodNum int
 var foodCount []int
 var foodPrice []int
 
-type userInfo struct{
-	Id int
+type userInfo struct {
+	Id       int
 	Password string
 }
+
 var userCache map[string]userInfo
 var tokenCache map[string]int
 var rTokenCache []string
 var foodListCache []byte
 
-
-type foodItem struct{
+type foodItem struct {
 	FoodId int `json:"food_id"`
-	Count int `json:"count"`
+	Count  int `json:"count"`
 }
-type orderStruct struct{
-	OrderId string `json:"id"`
-	UserId int `json:"user_id"`
-	Items []foodItem `json:"items"`
-	Total int `json:"total"`
+type orderStruct struct {
+	OrderId string     `json:"id"`
+	UserId  int        `json:"user_id"`
+	Items   []foodItem `json:"items"`
+	Total   int        `json:"total"`
 }
 
 func init() {
 	var rlim syscall.Rlimit
 	err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlim)
 	if err != nil {
-	    fmt.Println("get rlimit error: " + err.Error())
+		fmt.Println("get rlimit error: " + err.Error())
 	} else {
 		rlim.Cur = 10000
 		rlim.Max = 10000
 		err = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rlim)
 		if err != nil {
-		    fmt.Println("set rlimit error: " + err.Error())
+			fmt.Println("set rlimit error: " + err.Error())
 		}
 	}
 
-    rdHost := os.Getenv("REDIS_HOST")
-    rdPort := os.Getenv("REDIS_PORT")
-    if localMultVmTest {
-    	rdHost = "192.168.50.1"
-    }
+	rdHost := os.Getenv("REDIS_HOST")
+	rdPort := os.Getenv("REDIS_PORT")
+	if localMultVmTest {
+		rdHost = "192.168.50.1"
+	}
 
-    redisPool = &redis.Pool{
-        MaxIdle: 256,
-        MaxActive: 256,
-        IdleTimeout: 300 * time.Second,
-        Dial: func() (redis.Conn, error) {
-        	for {
-		        c, err := redis.Dial("tcp", rdHost + ":" + rdPort)
-		        if err != nil {
-		        	time.Sleep(time.Duration(2) * time.Millisecond)
-		        	continue
-		        }
-		        return c, err
-        	}
-        },
-    }
+	redisPool = &redis.Pool{
+		MaxIdle:     256,
+		MaxActive:   256,
+		IdleTimeout: 300 * time.Second,
+		Dial: func() (redis.Conn, error) {
+			for {
+				c, err := redis.Dial("tcp", rdHost+":"+rdPort)
+				if err != nil {
+					time.Sleep(time.Duration(2) * time.Millisecond)
+					continue
+				}
+				return c, err
+			}
+		},
+	}
 
-    initCache()
+	initCache()
 }
 
 func initCache() {
-    dbHost := os.Getenv("DB_HOST")
-    dbPort := os.Getenv("DB_PORT")	
+	dbHost := os.Getenv("DB_HOST")
+	dbPort := os.Getenv("DB_PORT")
 	dbName := os.Getenv("DB_NAME")
 	dbUser := os.Getenv("DB_USER")
 	dbPass := os.Getenv("DB_PASS")
 	if localMultVmTest {
-    	dbHost = "192.168.50.1"
-    }
+		dbHost = "192.168.50.1"
+	}
 
-	db, _ := sql.Open("mysql", dbUser + ":" + dbPass + "@tcp(" + dbHost + ":" + dbPort + ")/" + dbName + "?charset=utf8")
-    defer db.Close();
+	db, _ := sql.Open("mysql", dbUser+":"+dbPass+"@tcp("+dbHost+":"+dbPort+")/"+dbName+"?charset=utf8")
+	defer db.Close()
 	rows, _ := db.Query("select * from food")
 	defer rows.Close()
 	rc := *(getRC())
@@ -143,19 +143,19 @@ func initCache() {
 		rows.Scan(&id, &name, &password)
 
 		userCache[name] = userInfo{
-			Id: id,
+			Id:       id,
 			Password: password,
 		}
 	}
-	
+
 	tokenCache = make(map[string]int)
-    rTokenCache = make([]string, 0, 60000)
-    rTokenCache = append(rTokenCache, "");
-    for i := 1; i <= len(userCache); i++ {
+	rTokenCache = make([]string, 0, 60000)
+	rTokenCache = append(rTokenCache, "")
+	for i := 1; i <= len(userCache); i++ {
 		hashStr := fmt.Sprintf("token:%d", i)
 		k := hash(hashStr)
 		tokenCache[k] = i
-        rTokenCache = append(rTokenCache, k)
+		rTokenCache = append(rTokenCache, k)
 	}
 
 	println("food:", foodNum)
@@ -163,16 +163,16 @@ func initCache() {
 }
 
 func main() {
-	defer func(){
-		if err := recover(); err != nil{
-			log.Println(err);
+	defer func() {
+		if err := recover(); err != nil {
+			log.Println(err)
 		}
-	} ()
+	}()
 
 	rand.Seed(time.Now().UTC().UnixNano())
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	go updateFoodCount();
+	go updateFoodCount()
 
 	host := os.Getenv("APP_HOST")
 	port := os.Getenv("APP_PORT")
@@ -200,10 +200,10 @@ func main() {
 func updateFoodCount() {
 	values := make([]int, 0, foodNum)
 	keys := make([]interface{}, 0, foodNum)
-    for i := 1; i <= foodNum; i++ {
-        keys = append(keys, i)
-    }
-	
+	for i := 1; i <= foodNum; i++ {
+		keys = append(keys, i)
+	}
+
 	rc := *(getRC())
 
 	responseJson := new(bytes.Buffer)
@@ -217,8 +217,8 @@ func updateFoodCount() {
 			continue
 		}
 		redis.ScanSlice(res, &values)
-		
-		responseJson.Reset();
+
+		responseJson.Reset()
 		responseJson.WriteString("[")
 		for i := 0; i < foodNum; i++ {
 			id, _ := keys[i].(int)
@@ -232,10 +232,10 @@ func updateFoodCount() {
 			responseJson.WriteString("{\"id\":")
 			responseJson.WriteString(strconv.Itoa(id))
 			responseJson.WriteString(",\"price\":")
-			responseJson.WriteString(strconv.Itoa(foodPrice[id]))		
+			responseJson.WriteString(strconv.Itoa(foodPrice[id]))
 			responseJson.WriteString(",\"stock\":")
 			responseJson.WriteString(strconv.Itoa(foodCount[id]))
-			responseJson.WriteString("}")			
+			responseJson.WriteString("}")
 		}
 		responseJson.WriteString("]")
 		foodListCache = responseJson.Bytes()
@@ -245,7 +245,7 @@ func updateFoodCount() {
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	type inputData struct{
+	type inputData struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
@@ -257,7 +257,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		if err.Error() == "EOF" {
 			responseEemptyRequest(&w)
 		} else {
-    		responseMalformedJson(&w)   			
+			responseMalformedJson(&w)
 		}
 	} else {
 		userEntity, isHave := userCache[input.Username]
@@ -266,12 +266,12 @@ func loginHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 			responseJson.WriteString("{\"user_id\":")
 			responseJson.WriteString(strconv.Itoa(userEntity.Id))
 			responseJson.WriteString(",\"username\":\"")
-			responseJson.WriteString(input.Username)		
+			responseJson.WriteString(input.Username)
 			responseJson.WriteString("\",\"access_token\":\"")
 			responseJson.WriteString(rTokenCache[userEntity.Id])
-			responseJson.WriteString("\"}")	
-			response(&w, 200, responseJson.Bytes())			
-			//responseJson := fmt.Sprintf("{\"user_id\":%d,\"username\":\"%s\",\"access_token\":\"%s\"}", userEntity.Id, input.Username, rTokenCache[userEntity.Id])	
+			responseJson.WriteString("\"}")
+			response(&w, 200, responseJson.Bytes())
+			//responseJson := fmt.Sprintf("{\"user_id\":%d,\"username\":\"%s\",\"access_token\":\"%s\"}", userEntity.Id, input.Username, rTokenCache[userEntity.Id])
 			//response(&w, 200, []byte(responseJson))
 		} else {
 			response(&w, 403, []byte(`{"code":"USER_AUTH_FAIL","message":"用户名或密码错误"}`))
@@ -289,14 +289,14 @@ func foodsHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 }
 
 func postCartHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	type inputData struct{
+	type inputData struct {
 		FoodId string `json:"food_id"`
-		Count string `json:"count"`
+		Count  string `json:"count"`
 	}
 
 	uid := checkToken(r)
 	if uid != -1 {
-	   	responseJson := fmt.Sprintf("{\"cart_id\":\"%s%09d\"}", rTokenCache[uid], time.Now().UnixNano() % 1000000000)
+		responseJson := fmt.Sprintf("{\"cart_id\":\"%s%09d\"}", rTokenCache[uid], time.Now().UnixNano()%1000000000)
 		response(&w, 200, []byte(responseJson))
 	} else {
 		responseInvalidToken(&w)
@@ -304,12 +304,12 @@ func postCartHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params
 }
 
 func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	type inputData struct{
+	type inputData struct {
 		FoodId int `json:"food_id"`
-		Count int `json:"count"`
+		Count  int `json:"count"`
 	}
 
-    uid := checkToken(r)
+	uid := checkToken(r)
 	if uid != -1 {
 		decoder := json.NewDecoder(r.Body)
 		var input inputData
@@ -318,18 +318,18 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 			if err.Error() == "EOF" {
 				responseEemptyRequest(&w)
 			} else {
-	    		responseMalformedJson(&w)   			
+				responseMalformedJson(&w)
 			}
 		} else if input.FoodId <= 0 || input.FoodId > foodNum {
 			response(&w, 404, []byte(`{"code":"FOOD_NOT_FOUND","message":"食物不存在"}`))
 		} else {
-		    cid := ps.ByName("cid")
-		    if len(cid) < 9 {
-		    	response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
-		    	return
-		    }
-		    uh := cid[0:len(cid)-9]
-            cuid, isHave := tokenCache[uh]
+			cid := ps.ByName("cid")
+			if len(cid) < 9 {
+				response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
+				return
+			}
+			uh := cid[0 : len(cid)-9]
+			cuid, isHave := tokenCache[uh]
 
 			if isHave == false {
 				response(&w, 404, []byte(`{"code":"CART_NOT_FOUND","message":"篮子不存在"}`))
@@ -337,16 +337,16 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 				response(&w, 401, []byte(`{"code":"NOT_AUTHORIZED_TO_ACCESS_CART","message":"无权限访问指定的篮子"}`))
 			} else {
 				rc := *(getRC())
-	    		//defer rc.Close()
-				res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:" + cid))
+				//defer rc.Close()
+				res, _ := redis.Int64Map(rc.Do("HGETALL", "cart:"+cid))
 
 				sum := 0
-                sfid := strconv.Itoa(input.FoodId)
+				sfid := strconv.Itoa(input.FoodId)
 
-                res[sfid] += int64(input.Count)
-                if res[sfid] < 0 {
-                    res[sfid] = 0
-                }
+				res[sfid] += int64(input.Count)
+				if res[sfid] < 0 {
+					res[sfid] = 0
+				}
 				for _, value := range res {
 					sum += int(value)
 				}
@@ -354,12 +354,12 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 					rc.Close()
 					response(&w, 403, []byte(`{"code":"FOOD_OUT_OF_LIMIT","message":"篮子中食物数量超过了三个"}`))
 				} else {
-                    if res[sfid] > 0 {
-                        rc.Do("HSET", "cart:" + cid, input.FoodId, res[sfid])
-                    } else {
-                        rc.Do("HDEL", "cart:" + cid, input.FoodId)
-                    }
-                    rc.Close()
+					if res[sfid] > 0 {
+						rc.Do("HSET", "cart:"+cid, input.FoodId, res[sfid])
+					} else {
+						rc.Do("HDEL", "cart:"+cid, input.FoodId)
+					}
+					rc.Close()
 					response(&w, 204, []byte(``))
 				}
 			}
@@ -370,12 +370,12 @@ func patchCartHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 }
 
 func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	type inputData struct{
+	type inputData struct {
 		CartId string `json:"cart_id"`
 	}
 
 	uid := checkToken(r)
-	if uid != -1 {		
+	if uid != -1 {
 		decoder := json.NewDecoder(r.Body)
 		var input inputData
 		err := decoder.Decode(&input)
@@ -383,7 +383,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 			if err.Error() == "EOF" {
 				responseEemptyRequest(&w)
 			} else {
-	    		responseMalformedJson(&w)   			
+				responseMalformedJson(&w)
 			}
 			return
 		}
@@ -391,7 +391,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 		rc := *(getRC())
 		//defer rc.Close()
 		rc.Send("HGET", "order", rTokenCache[uid])
-		rc.Send("HGETALL", "cart:" + input.CartId)
+		rc.Send("HGETALL", "cart:"+input.CartId)
 		rc.Flush()
 
 		//oid, _ := redis.String(rc.Do("HGET", "order", rTokenCache[uid]))
@@ -400,7 +400,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 			rc.Close()
 			response(&w, 403, []byte(`{"code":"ORDER_OUT_OF_LIMIT","message":"每个用户只能下一单"}`))
 		} else {
-			uh := input.CartId[0:len(input.CartId)-9]
+			uh := input.CartId[0 : len(input.CartId)-9]
 			cuid, isHave := tokenCache[uh]
 
 			if isHave == false {
@@ -451,7 +451,7 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 					itemsBuffer.WriteString(strconv.Itoa(fid))
 					itemsBuffer.WriteString(",\"count\":")
 					itemsBuffer.WriteString(strconv.Itoa(value))
-					itemsBuffer.WriteString("}")	
+					itemsBuffer.WriteString("}")
 
 					total += foodPrice[fid] * value
 
@@ -474,10 +474,10 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 					itemsBuffer.WriteString(strconv.Itoa(total))
 					itemsBuffer.WriteString("}")
 					orderToken := rTokenCache[uid]
-					rc.Send("HSET", "order",  orderToken, itemsBuffer.String())
+					rc.Send("HSET", "order", orderToken, itemsBuffer.String())
 					rc.Flush()
 					rc.Close()
-					response(&w, 200, []byte("{\"id\":\"" + orderToken + "\"}"))
+					response(&w, 200, []byte("{\"id\":\""+orderToken+"\"}"))
 				} else {
 					for {
 						rc.Do("WATCH", food_id...)
@@ -485,8 +485,8 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 						counts := make([]int, 0, 3)
 						fc, _ := redis.Values(rc.Do("MGET", food_id...))
 						redis.ScanSlice(fc, &counts)
-						
-						toRedis := make([]interface{}, 0, 6)					
+
+						toRedis := make([]interface{}, 0, 6)
 
 						for i := 0; i < food_len; i++ {
 							counts[i] -= food_count[i]
@@ -508,15 +508,15 @@ func postOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 							break
 						}
 					}
-					
+
 					// success
 					itemsBuffer.WriteString("],\"total\":")
 					itemsBuffer.WriteString(strconv.Itoa(total))
 					itemsBuffer.WriteString("}")
 					orderToken := rTokenCache[uid]
-					rc.Do("HSET", "order",  orderToken, itemsBuffer.String())
+					rc.Do("HSET", "order", orderToken, itemsBuffer.String())
 					rc.Close()
-					response(&w, 200, []byte("{\"id\":\"" + orderToken + "\"}"))
+					response(&w, 200, []byte("{\"id\":\""+orderToken+"\"}"))
 				}
 			}
 		}
@@ -532,7 +532,7 @@ func getOrderHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params
 		defer rc.Close()
 
 		oj, _ := redis.String(rc.Do("HGET", "order", rTokenCache[uid]))
-		response(&w, 200, []byte("[" + oj + "]"))
+		response(&w, 200, []byte("["+oj+"]"))
 	} else {
 		responseInvalidToken(&w)
 	}
@@ -554,8 +554,8 @@ func adminHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		for i := 0; i < len(arr); i += 2 {
 			if i != 0 {
 				responseJson.WriteString(",")
-			}			
-			responseJson.WriteString(arr[i + 1])
+			}
+			responseJson.WriteString(arr[i+1])
 		}
 		responseJson.WriteString("]")
 
@@ -597,31 +597,31 @@ func responseMalformedJson(w *http.ResponseWriter) {
 }
 
 func checkErr(err error) {
-    if err != nil {
-        panic(err)
-    }
+	if err != nil {
+		panic(err)
+	}
 }
 
 func getIp() string {
-    name, err := os.Hostname()
-    if err != nil {
-         fmt.Printf("Oops: %v\n", err)
-         return "Error in getIp"
-    }
+	name, err := os.Hostname()
+	if err != nil {
+		fmt.Printf("Oops: %v\n", err)
+		return "Error in getIp"
+	}
 
-    addrs, err := net.LookupHost(name)
-    if err != nil {
-        fmt.Printf("Oops: %v\n", err)
-        return "Error in getIp"
-    }
+	addrs, err := net.LookupHost(name)
+	if err != nil {
+		fmt.Printf("Oops: %v\n", err)
+		return "Error in getIp"
+	}
 
-    return addrs[1]
+	return addrs[1]
 }
 
 func hash(s string) string {
-    h := fnv.New32a()
-    h.Write([]byte(s))
-    return fmt.Sprint(h.Sum32())
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return fmt.Sprint(h.Sum32())
 }
 
 func getRC() *redis.Conn {
